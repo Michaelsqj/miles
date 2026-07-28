@@ -251,6 +251,11 @@ def _train(args: ScriptArgs):
             f"--lora-rank {args.lora_rank} "
             f"--lora-alpha {args.lora_alpha} "
             "--target-modules all-linear "
+            # Grouped-expert MLPs fuse gate and up, so their lora_A carries both stacked
+            # (2 x rank) while each projection keeps its own lora_B. That is the layout
+            # SGLang's virtual-experts LoRA kernel asserts on; per-expert adapters give it
+            # one lora_B and it fails with "lora_a rank 2r != n_b (1) * lora_b rank r".
+            "--experts-shared-outer-loras "
             "--sglang-lora-backend triton "
             "--sglang-lora-use-virtual-experts "
             "--sglang-max-loras-per-batch 1 "
