@@ -251,10 +251,6 @@ def _train(args: ScriptArgs):
             f"--lora-rank {args.lora_rank} "
             f"--lora-alpha {args.lora_alpha} "
             "--target-modules all-linear "
-            # Grouped-expert MLPs fuse gate and up, so their lora_A carries both stacked
-            # (2 x rank) while each projection keeps its own lora_B. That is the layout
-            # SGLang's virtual-experts LoRA kernel asserts on; per-expert adapters give it
-            # one lora_B and it fails with "lora_a rank 2r != n_b (1) * lora_b rank r".
             "--experts-shared-outer-loras "
             "--sglang-lora-backend triton "
             "--sglang-lora-use-virtual-experts "
@@ -274,10 +270,7 @@ def _train(args: ScriptArgs):
             "--sglang-max-mamba-cache-size 256 "
         )
         if args.rollout_num_gpus_per_engine >= 16:
-            # A 2-node engine has the headroom to keep both sides resident, and skipping
-            # the offload barrier is worth a lot per step. Smaller engines take the
-            # barrier so they fit; the adapter sync repacks onto fresh storage, so it
-            # works either way (see _repack_onto_fresh_storage).
+            # A 2-node engine can hold both sides; skipping the offload barrier is faster.
             sglang_args += "--no-offload-rollout --no-offload-train "
 
     sglang_args += (
