@@ -187,13 +187,12 @@ def setup_model_and_optimizer(
         model = _setup_lora_model_via_bridge(args)
     else:
         provider_func = get_model_provider_func(args, role)
-        if is_lora_enabled(args) and role == "actor":
+        if (
+            is_lora_enabled(args)
+            and role == "actor"
+            and "inkling" in (getattr(args, "custom_model_provider_path", None) or "")
+        ):
             # Native (non-bridge) LoRA: apply adapters inside the provider so DDP wraps an already-frozen base.
-            if "inkling" not in (getattr(args, "custom_model_provider_path", None) or ""):
-                raise NotImplementedError(
-                    "LoRA with --megatron-to-hf-mode raw is only implemented for the Inkling "
-                    "plugin (miles_plugins.models.inkling). Use bridge mode for other models."
-                )
             from miles_plugins.models.inkling.lora import wrap_model_provider_with_inkling_lora
 
             provider_func = wrap_model_provider_with_inkling_lora(provider_func, args)

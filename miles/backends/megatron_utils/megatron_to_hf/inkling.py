@@ -226,12 +226,14 @@ def get_inkling_atomic_update_groups(args):
             AtomicUpdateGroup(
                 key=f"inkling_shared_{which}",
                 suffixes=tuple(f".mlp.shared_experts.experts.{e}.{which}.weight" for e in range(ns)),
+                optional=True,
             )
         )
     groups.append(
         AtomicUpdateGroup(
             key="inkling_gate",
             suffixes=(".mlp.router.weight", ".mlp.router.shared_gate"),
+            optional=True,
         )
     )
     return groups

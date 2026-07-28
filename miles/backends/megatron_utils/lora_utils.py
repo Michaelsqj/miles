@@ -119,7 +119,7 @@ def sglang_lora_target_all_sentinel(args) -> bool:
     """Hand SGLang the ``"all"`` shorthand so it auto-detects module names (required for Inkling)."""
     from miles.utils.chat_template_utils.inkling import is_inkling_checkpoint
 
-    return is_inkling_checkpoint(args.hf_checkpoint)
+    return is_inkling_checkpoint(getattr(args, "hf_checkpoint", None) or "")
 
 
 _marked_lora_grad_params_cache: dict[int, list] = {}

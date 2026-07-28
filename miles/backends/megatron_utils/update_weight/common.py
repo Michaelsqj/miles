@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 class AtomicUpdateGroup:
     key: str
     suffixes: tuple[str, ...]
+    # Groups whose suffixes only exist on some layers (e.g. MoE-only groups) legitimately
+    # match nothing on a PP rank that holds none of those layers. Everything else should
+    # still fail loudly, since an unmatched group is normally a mistyped suffix.
+    optional: bool = False
 
 
 def get_atomic_update_groups(args, model_name) -> list[AtomicUpdateGroup]:
@@ -106,9 +110,9 @@ def get_named_update_units(param_names: Sequence[str], atomic_update_groups) -> 
         matched_group_keys.add(group.key)
 
     for group in atomic_update_groups:
-        # A PP rank may hold no layer needing this group; skip unmatched groups instead of failing.
-        if group.key not in matched_group_keys:
-            continue
+        assert group.optional or group.key in matched_group_keys, (
+            f"Atomic update group {group.key} references no params matching suffixes {group.suffixes}"
+        )
 
     for (prefix, key), names in pending_groups.items():
         assert all(names), f"Atomic update group {prefix}:{key} is incomplete: {names}"
