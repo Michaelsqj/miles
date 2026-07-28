@@ -181,6 +181,34 @@ remain a `messages` list. SGLang handles templating server-side.
 
 </Warning>
 
+### Optional teardown: the `abort` hook
+
+The module named by `--custom-agent-function-path` may expose an optional `abort`
+function alongside the agent entry point:
+
+```python
+async def abort(args) -> None:
+    ...  # tell this agent's backend to cancel its in-flight work
+```
+
+Miles calls it during **oversampling abort**. When dynamic sampling has collected
+enough groups, the rollout aborts in-flight SGLang generation (see
+[Partial rollout](/user-guide/training-script-walkthrough#partial-rollout-reclaim-aborted-work)).
+An external agent loop doesn't observe that abort on its own — it keeps issuing
+fresh completion requests until it hits its own `max_seq_len` or timeout. If your
+agent drives an external backend (e.g. a sandbox/agent server), define `abort` to
+tell that backend to tear down the trials tied to this rollout.
+
+The hook is **entirely optional and safe to omit**:
+
+- If the module defines no `abort`, nothing is called — existing plugins are
+  unaffected and their in-flight generations simply drain as before.
+- It only fires when `--custom-agent-function-path` is set, so non-agentic runs
+  never invoke it.
+
+See [`swe_agent_function.abort`](https://github.com/radixark/miles/blob/main/examples/experimental/swe-agent-v2/swe_agent_function.py)
+for a reference implementation that flushes the Harbor agent server.
+
 ### Customizing the wrapper
 
 [`agentic_tool_call.generate`](https://github.com/radixark/miles/blob/main/miles/rollout/generate_hub/agentic_tool_call.py)
@@ -206,7 +234,7 @@ TITO needs two things from every SGLang response:
 By default, `build_chat_request_kwargs` sets both flags. The session middleware
 forwards raw `messages` to SGLang, which tokenizes the prompt and returns the
 response. `_compute_sample_from_openai_record` in
-[`openai_endpoint_utils.py`](https://github.com/radixark/miles/blob/main/miles/rollout/generate_utils/openai_endpoint_utils.py)
+[`merge.py`](https://github.com/radixark/miles/blob/main/miles/rollout/session/samples/merge.py)
 extracts prompt and output ids from the response and concatenates them into
 `sample.tokens`. You don't need to provide `input_ids` yourself.
 

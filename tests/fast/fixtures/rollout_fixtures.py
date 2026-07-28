@@ -108,7 +108,6 @@ def _with_session_server(args: Namespace, backend_url: str) -> Iterator[UvicornT
         hf_checkpoint=args.hf_checkpoint,
         chat_template_path=getattr(args, "chat_template_path", None),
         tito_model=getattr(args, "tito_model", "default"),
-        tito_allowed_append_roles=getattr(args, "tito_allowed_append_roles", ["tool"]),
         use_rollout_routing_replay=getattr(args, "use_rollout_routing_replay", False),
     )
     session_server = SessionServer(session_args, backend_url=backend_url)
@@ -117,7 +116,7 @@ def _with_session_server(args: Namespace, backend_url: str) -> Iterator[UvicornT
     try:
         server.start()
         args.session_server_ip = "127.0.0.1"
-        args.session_server_port = port
+        args.session_server_ports = [port]
         yield server
     finally:
         server.stop()

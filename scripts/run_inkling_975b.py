@@ -43,9 +43,10 @@ import miles.utils.external_utils.command_utils as U
 
 app = typer.Typer()
 
-_MODEL_NUM_LAYERS = {
-    "Inkling": 66,
-    "Inkling-4layer": 4,
+# Maps --model-name onto the scripts/models/*.sh recipe that execute_train sources.
+_MODEL_REGISTRY = {
+    "Inkling": "inkling-975b",
+    "Inkling-4layer": "inkling-975b-4layer",
 }
 
 
@@ -70,6 +71,8 @@ class ScriptArgs(U.ExecuteTrainConfig):
 
     # performance configs
     num_gpus_per_node: int = 4
+    # One rollout engine spans 2 nodes at 975B; the 4-layer proxy fits on fewer GPUs.
+    rollout_num_gpus_per_engine: int = 16
     lr: float | None = None
     rollout_max_response_len: int = 4096
     sglang_context_length: int = 8192
@@ -101,10 +104,6 @@ class ScriptArgs(U.ExecuteTrainConfig):
         self.colocate = True
         self.actor_num_nodes = self.num_nodes
         self.actor_num_gpus_per_node = self.num_gpus_per_node
-
-    @property
-    def num_layers(self):
-        return _MODEL_NUM_LAYERS[self.model_name]
 
     @property
     def is_mm(self):
@@ -241,14 +240,12 @@ def _train(args: ScriptArgs):
         # token packing exposes a PP-p2p x EP-a2a NCCL launch-order race on
         # varlen shapes).
         optimizer_args += (
-            f"--optimizer-state-nvme-dir {args.optimizer_nvme_dir} "
-            "--optimizer-state-nvme-chunk-mb 256 "
             "--offload-train-target disk "
             f"--offload-train-disk-dir {args.train_offload_disk_dir} "
         )
         perf_args += "--micro-batch-size 1 "
         sglang_args = (
-            "--rollout-num-gpus-per-engine 16 "
+            f"--rollout-num-gpus-per-engine {args.rollout_num_gpus_per_engine} "
             "--sglang-mem-fraction-static 0.6 "
             "--sglang-max-running-requests 64 "
             "--sglang-max-total-tokens 327680 "
@@ -267,15 +264,19 @@ def _train(args: ScriptArgs):
             lora_args += f"--lora-adapter-path {args.lora_adapter_path} "
         perf_args += "--use-dynamic-batch-size " "--max-tokens-per-gpu 4096 "
         sglang_args = (
-            "--rollout-num-gpus-per-engine 16 "
-            "--sglang-ep-size 16 "
-            "--no-offload-rollout --no-offload-train "
+            f"--rollout-num-gpus-per-engine {args.rollout_num_gpus_per_engine} "
+            f"--sglang-ep-size {args.rollout_num_gpus_per_engine} "
             "--sglang-mem-fraction-static 0.65 "
             "--sglang-max-running-requests 32 "
             "--sglang-max-total-tokens 320000 "
             "--sglang-cuda-graph-max-bs 64 "
             "--sglang-max-mamba-cache-size 256 "
         )
+        if args.rollout_num_gpus_per_engine >= 16:
+            # A 2-node engine has the headroom to keep both sides resident, and
+            # skipping the offload barrier is worth a lot per step. Smaller
+            # engines need the colocate offload to fit at all.
+            sglang_args += "--no-offload-rollout --no-offload-train "
 
     sglang_args += (
         "--sglang-attention-backend fa4 "
@@ -335,7 +336,7 @@ def _train(args: ScriptArgs):
         train_args=train_args,
         config=args,
         num_gpus_per_node=args.num_gpus_per_node,
-        megatron_model_type="inkling-975b",
+        megatron_model_type=_MODEL_REGISTRY[args.model_name],
         extra_env_vars=extra_env_vars,
         megatron_path=args.megatron_path,
     )
