@@ -110,9 +110,9 @@ def get_named_update_units(param_names: Sequence[str], atomic_update_groups) -> 
         matched_group_keys.add(group.key)
 
     for group in atomic_update_groups:
-        assert group.optional or group.key in matched_group_keys, (
-            f"Atomic update group {group.key} references no params matching suffixes {group.suffixes}"
-        )
+        assert (
+            group.optional or group.key in matched_group_keys
+        ), f"Atomic update group {group.key} references no params matching suffixes {group.suffixes}"
 
     for (prefix, key), names in pending_groups.items():
         assert all(names), f"Atomic update group {prefix}:{key} is incomplete: {names}"
