@@ -416,6 +416,45 @@ class UpdateWeightFromTensor:
         return refs or [], long_lived_tensors
 
 
+def _repack_onto_fresh_storage(
+    named_tensors: list[tuple[str, torch.Tensor]],
+) -> dict[str, torch.Tensor]:
+    """Copy CUDA tensors into freshly allocated flat buffers and return views onto them.
+
+    ``torch_memory_saver.region()`` is a ``torch.cuda.use_mem_pool`` context, so anything
+    allocated while building the model -- the LoRA adapter parameters included -- lives in
+    a MemPool the preloaded hook backs with cuMem. cuMem allocations cannot be exported
+    over the legacy CUDA IPC API that ``MultiprocessingSerializer`` uses, so handing their
+    storages straight to the engine fails with "CUDA error: invalid argument" on the first
+    sync. Allocating here, outside any region, gets normal caching-allocator memory whose
+    handles export fine. (This is also why the FlattenedTensorBucket path works: its
+    flattened tensor is likewise allocated at sync time.)
+
+    One buffer per (dtype, device) rather than one clone per tensor: the direct-dict
+    transport relies on the pickler memoizing storages so the engine receives a handful of
+    IPC handles instead of one per adapter tensor.
+    """
+    groups: dict[tuple[torch.dtype, torch.device], list[tuple[str, torch.Tensor]]] = {}
+    for name, tensor in named_tensors:
+        # Non-CUDA tensors are not shared by handle, so leave them where they are.
+        if tensor.is_cuda:
+            groups.setdefault((tensor.dtype, tensor.device), []).append((name, tensor))
+
+    views: dict[str, torch.Tensor] = {}
+    for (dtype, device), items in groups.items():
+        flat = torch.empty(sum(t.numel() for _, t in items), dtype=dtype, device=device)
+        offset = 0
+        for name, tensor in items:
+            view = flat[offset : offset + tensor.numel()].view(tensor.shape)
+            view.copy_(tensor)
+            views[name] = view
+            offset += tensor.numel()
+
+    # Keep the caller's ordering so the payload differs from the pre-repack one only in
+    # which storage each tensor points at.
+    return {name: views.get(name, tensor) for name, tensor in named_tensors}
+
+
 def _send_to_colocated_engine(
     hf_named_tensors: list[tuple[str, torch.Tensor]],
     *,
@@ -438,8 +477,11 @@ def _send_to_colocated_engine(
     long_live_tensors = []
 
     if is_lora:
-        # Serialize the named dict directly (no FlattenedTensorBucket); the pickler memoizes storages so IPC shares each flat once.
-        payload = dict(hf_named_tensors)
+        # Serialize the named dict directly (no FlattenedTensorBucket) so the engine
+        # receives the whole unsharded adapter and shards it per TP rank itself. Repack
+        # onto fresh storage first so the handles are IPC-exportable even when the
+        # training actor is offload-managed.
+        payload = _repack_onto_fresh_storage(hf_named_tensors)
         long_live_tensors.append(payload)
         converted_named_tensors_by_dtypes = {}
         serialized_lora = MultiprocessingSerializer.serialize(payload, output_str=True)
