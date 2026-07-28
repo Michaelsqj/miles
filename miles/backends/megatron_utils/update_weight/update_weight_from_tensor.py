@@ -411,6 +411,10 @@ class UpdateWeightFromTensor:
             lora_name=LORA_ADAPTER_NAME,
             lora_loaded=self._lora_loaded,
             check_equal=getattr(self.args, "check_lora_weight_equal", False),
+            # Only when the training actor is offload-managed are the adapter storages
+            # cuMem-backed and thus not IPC-exportable. Skipping the copy otherwise keeps
+            # the peak memory of every already-working configuration unchanged.
+            repack_lora_for_ipc=getattr(self.args, "offload_train", False),
         )
         self._lora_loaded = True
         return refs or [], long_lived_tensors
@@ -466,6 +470,7 @@ def _send_to_colocated_engine(
     lora_name: str | None = None,
     lora_loaded: bool = False,
     check_equal: bool = False,
+    repack_lora_for_ipc: bool = False,
 ) -> tuple[list[ObjectRef], Any]:
     # Placeholder ranks (GPU slots reserved but no engine) have no gather group.
     # gather_object is only collective among group members, so we skip entirely.
@@ -478,10 +483,8 @@ def _send_to_colocated_engine(
 
     if is_lora:
         # Serialize the named dict directly (no FlattenedTensorBucket) so the engine
-        # receives the whole unsharded adapter and shards it per TP rank itself. Repack
-        # onto fresh storage first so the handles are IPC-exportable even when the
-        # training actor is offload-managed.
-        payload = _repack_onto_fresh_storage(hf_named_tensors)
+        # receives the whole unsharded adapter and shards it per TP rank itself.
+        payload = _repack_onto_fresh_storage(hf_named_tensors) if repack_lora_for_ipc else dict(hf_named_tensors)
         long_live_tensors.append(payload)
         converted_named_tensors_by_dtypes = {}
         serialized_lora = MultiprocessingSerializer.serialize(payload, output_str=True)
