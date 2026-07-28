@@ -10,7 +10,6 @@ _FLEX_COMPILED = None
 
 
 def flex_compiled():
-    # max-autotune-no-cudagraphs required on B200/sm_100 (default bwd config exceeds 232KB smem)
     global _FLEX_COMPILED
     if _FLEX_COMPILED is None:
         assert flex_attention is not None, "flex_attention needs torch>=2.5 + inductor"
@@ -21,7 +20,6 @@ def flex_compiled():
 
 
 def te_attention(q, k, v, rel_logits, seqlens, window_left, is_local, scale):
-    # differentiable TE-DPA fwd; q [T,nh,hd], k/v [T,nkv,hd], rel_logits [T,nh,RE] -> [T,nh,hd]
     import transformer_engine.pytorch as te
 
     T, nh, hd = q.shape
@@ -35,13 +33,13 @@ def te_attention(q, k, v, rel_logits, seqlens, window_left, is_local, scale):
         qkv_format="sbhd",
         softmax_scale=scale,
     )
-    rb = rel_logits.permute(1, 0, 2)  # [nh, T, RE]
+    rb = rel_logits.permute(1, 0, 2)
     qi = torch.arange(T, device=q.device).view(T, 1)
     ki = torch.arange(T, device=q.device).view(1, T)
     rd = qi - ki
     valid = (rd >= 0) & (rd < RE)
     idx = rd.clamp(0, RE - 1)
-    bias = (torch.gather(rb, 2, idx.unsqueeze(0).expand(nh, T, T)) * valid.unsqueeze(0)).unsqueeze(0)  # [1,nh,T,T]
+    bias = (torch.gather(rb, 2, idx.unsqueeze(0).expand(nh, T, T)) * valid.unsqueeze(0)).unsqueeze(0)
     win = (window_left, 0) if is_local else (-1, -1)
     if seqlens is not None and len(seqlens) > 1:
         seg = torch.repeat_interleave(
@@ -87,7 +85,7 @@ def _fa4_fwd(q, k, v, rel_logits, seqlens, window_left, is_local, scale, rel_ext
     )
     if isinstance(out, tuple):
         out = out[0]
-    return out  # [T, nh, hd]
+    return out
 
 
 class _InklingFA4Attention(torch.autograd.Function):

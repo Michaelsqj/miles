@@ -120,13 +120,6 @@ def wire_mm_towers(model, hf_checkpoint: str) -> None:
             local, emb = local[sel], embeds[sel]
         else:
             local, emb = positions, embeds
-        # Clone UNCONDITIONALLY on every rank. Guarding the clone behind
-        # local.numel() diverges the TP group under sequence parallelism: only
-        # ranks whose SP slice contains an image token would clone. Within one TP
-        # group that leaves some ranks carrying a plain cloned tensor and others
-        # the original SP-region tensor from the embedding all-gather, and the
-        # subsequent SP reduce-scatter/all-gather pair mixes the two -> divergent
-        # activations (vision blindness) or a wedged collective.
         decoder_input = decoder_input.clone()
         if local.numel():
             decoder_input[local, 0] = emb.to(decoder_input.dtype)

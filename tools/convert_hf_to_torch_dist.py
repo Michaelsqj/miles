@@ -67,8 +67,6 @@ def get_args():
     def ceildiv(a, b):
         return -(a // -b)
 
-    # CONVERT_KEEP_PP1=1 skips the PP auto-boost (needed for small models with high EP:
-    # e.g. 4-layer EP16 on 16 GPUs requires PP1 since world % (etp*ep*pp) must be 0).
     if args.pipeline_model_parallel_size == 1 and world_size > 1 and not os.environ.get("CONVERT_KEEP_PP1"):
         pp_size = world_size
         while True:

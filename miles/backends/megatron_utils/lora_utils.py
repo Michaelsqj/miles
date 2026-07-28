@@ -198,7 +198,6 @@ def log_lora_grad_layer_norms(model: Sequence[torch.nn.Module], max_logs: int = 
     _LORA_LAYER_NORM_LOGS[0] += 1
     prof = " ".join(f"L{k}:{v ** 0.5:.3e}" for k, v in sorted(sq.items()))
     logger.info("[inkling-lora] per-layer adapter grad norms: %s", prof)
-    # Fresh-adapter step-1 invariant (B zero-init): dL/dA == 0, dL/dB nonzero.
     if _LORA_LAYER_NORM_LOGS[0] == 1:
         import json
 
@@ -504,14 +503,10 @@ def save_lora_checkpoint(
     tp_rank = parallel_state.tp.rank
     pp_rank = parallel_state.pp.rank
 
-    # EVERY rank creates the directory: save dir may be node-local storage where dp0-only mkdir misses other nodes.
     save_path.mkdir(parents=True, exist_ok=True)
     if dist.is_initialized():
         dist.barrier()
 
-    # ---- Megatron-native format (per rank, fast resume) ----
-    # Every rank saves its own shard keyed by global rank: ranks sharing (tp,pp) hold
-    # different EP experts, so a tp/pp-keyed shard would silently drop all but one.
     adapter_state: dict[str, torch.Tensor] = {}
     for model_chunk in model:
         for name, param in model_chunk.named_parameters():
@@ -526,7 +521,6 @@ def save_lora_checkpoint(
     # ---- HF PEFT format (uses bridge for correct name/weight conversion) ----
     # Bridge export is collective: all TP ranks participate in the all-gather,
     # so every rank must call export_adapter_weights.
-    # Best-effort and symmetric on all ranks: on failure the native shards still suffice for resume.
     try:
         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
@@ -539,7 +533,6 @@ def save_lora_checkpoint(
             ):
                 lora_state_dict[hf_name] = weight
 
-        # Only one rank writes the HF PEFT files (bridge already gathered across TP)
         if is_dp_cp_rank_0 and tp_rank == 0 and pp_rank == 0:
             torch.save(lora_state_dict, save_path / "adapter_model.bin")
 
@@ -624,7 +617,6 @@ def load_lora_adapter(
     pp_rank = get_parallel_state().pp.rank
 
     # ---- Try Megatron-native format first (fast, no conversion needed) ----
-    # Per-global-rank shard; fall back to legacy tp/pp naming only when EP<=TP.
     global_rank = dist.get_rank() if dist.is_initialized() else 0
     native_path = adapter_dir / f"adapter_megatron_rank{global_rank}.pt"
     if not native_path.exists():
@@ -698,7 +690,6 @@ def _load_training_state(
 def build_lora_sync_config(args: Namespace) -> dict[str, Any]:
     """Build LoRA config dict for syncing weights to SGLang engines."""
     if sglang_lora_target_all_sentinel(args):
-        # PEFT shorthand: engine already resolved "all" to concrete module names at startup.
         target_modules_hf: Any = "all-linear"
     else:
         target_modules_hf = (

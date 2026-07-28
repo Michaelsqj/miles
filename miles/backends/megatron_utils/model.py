@@ -192,7 +192,6 @@ def setup_model_and_optimizer(
             and role == "actor"
             and "inkling" in (getattr(args, "custom_model_provider_path", None) or "")
         ):
-            # Native (non-bridge) LoRA: apply adapters inside the provider so DDP wraps an already-frozen base.
             from miles_plugins.models.inkling.lora import wrap_model_provider_with_inkling_lora
 
             provider_func = wrap_model_provider_with_inkling_lora(provider_func, args)
@@ -216,7 +215,6 @@ def setup_model_and_optimizer(
     config.timers = None
 
     if _is_muon_optimizer(config.optimizer):
-        # Inkling's fused unequal-width qkvr breaks muon's split_qkv reshape; orthogonalize the whole matrix instead.
         if config.muon_split_qkv and "inkling" in (getattr(args, "custom_model_provider_path", None) or ""):
             if is_first_replica_megatron_main_rank():
                 logger.info(
@@ -684,7 +682,6 @@ def finalize_model_grads_with_empty_cache(*args, **kwargs):
     free, total = torch.cuda.mem_get_info(device)
     if free / total < 0.1:
         clear_memory()
-    # Sum native-LoRA replicated-param partial grads over TP/EP before the DP reduce-scatter; no-op otherwise.
     from .lora_utils import log_lora_grad_layer_norms, reduce_marked_lora_grads
 
     reduce_marked_lora_grads(args[0])
@@ -1023,9 +1020,6 @@ def initialize_model_and_optimizer(
     else:
         load_ctx = nullcontext()
 
-    # Skip load_checkpoint when --load is staged but holds no real checkpoint, keeping the
-    # provider-initialized weights. An unset --load is not that case: setup_model_and_optimizer
-    # has already asserted a pretrained_checkpoint is there instead, so let Megatron load it.
     load_dir = getattr(args, "load", None)
     if load_dir is None or _has_real_ckpt(load_dir):
         with load_ctx:
@@ -1043,7 +1037,6 @@ def initialize_model_and_optimizer(
             )
         iteration = 0
 
-    # Native Inkling LoRA: load the HF-format adapter AFTER the base load (adapter params are outside the dist-ckpt).
     if (
         is_lora_enabled(args)
         and role == "actor"

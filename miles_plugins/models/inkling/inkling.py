@@ -134,7 +134,7 @@ class _Sconv(nn.Module):
         self.weight = nn.Parameter(torch.zeros(channels, 1, kernel, dtype=dtype))
         self.k = kernel
 
-    def forward(self, x, seqlens=None):  # [T,C]
+    def forward(self, x, seqlens=None):
         return sconv_fp32_packed(x, self.weight, seqlens)
 
     def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
@@ -285,9 +285,7 @@ class InklingSelfAttention(SelfAttention):
         valid = (rd >= 0) & (rd < RE)
         idx = rd.clamp(0, RE - 1)
         rb = rl.permute(1, 0, 2)
-        bias = (torch.gather(rb, 2, idx.unsqueeze(0).expand(nh_l, T, T)) * valid.unsqueeze(0)).unsqueeze(
-            0
-        )  # [1,nh,T,T]
+        bias = (torch.gather(rb, 2, idx.unsqueeze(0).expand(nh_l, T, T)) * valid.unsqueeze(0)).unsqueeze(0)
         if seqlens is not None and len(seqlens) > 1:
             seg_id = torch.repeat_interleave(
                 torch.arange(len(seqlens), device=q.device), torch.tensor(seqlens, device=q.device)
@@ -307,13 +305,13 @@ class InklingSelfAttention(SelfAttention):
 
     def _seg_cp(self, q, k, v, r, seqlens, q_off, T_full):
         T_loc, nh_l, hd = q.shape
-        rl = torch.einsum("thd,de->the", r.float(), self.rel_proj.float())  # [T_loc, nh_l, RE]
+        rl = torch.einsum("thd,de->the", r.float(), self.rel_proj.float())
         RE = rl.shape[-1]
         qi = (q_off + torch.arange(T_loc, device=q.device)).view(T_loc, 1)
         ki = torch.arange(T_full, device=q.device).view(1, T_full)
-        rd = qi - ki  # [T_loc, T_full]
+        rd = qi - ki
         idx = rd.clamp(0, RE - 1)
-        rb = rl.permute(1, 0, 2)  # [nh_l, T_loc, RE]
+        rb = rl.permute(1, 0, 2)
         bias = torch.gather(rb, 2, idx.unsqueeze(0).expand(nh_l, T_loc, T_full)) * ((rd >= 0) & (rd < RE)).unsqueeze(0)
         mask = rd < 0
         if self.is_local:
@@ -323,7 +321,7 @@ class InklingSelfAttention(SelfAttention):
                 torch.arange(len(seqlens), device=q.device), torch.tensor(seqlens, device=q.device)
             )
             mask = mask | (seg[q_off : q_off + T_loc].view(T_loc, 1) != seg.view(1, T_full))
-        bias = bias.masked_fill(mask.unsqueeze(0), -1e9).unsqueeze(0).to(q.dtype)  # [1, nh_l, T_loc, T_full]
+        bias = bias.masked_fill(mask.unsqueeze(0), -1e9).unsqueeze(0).to(q.dtype)
         ctx = self.dpa(
             q.unsqueeze(1).contiguous(),
             k.unsqueeze(1).contiguous(),
@@ -359,8 +357,8 @@ class InklingSelfAttention(SelfAttention):
     def _seg_flex(self, q, k, v, r, seqlens=None):
         T, nh_l, hd = q.shape
         RE, W, is_local = self.rel_extent, self.window[0], self.is_local
-        rl = torch.einsum("thd,de->the", r.float(), self.rel_proj.float())  # [T,nh_l,RE]
-        rel_logits = rl.permute(1, 0, 2).contiguous()  # [nh_l,T,RE]
+        rl = torch.einsum("thd,de->the", r.float(), self.rel_proj.float())
+        rel_logits = rl.permute(1, 0, 2).contiguous()
         seg_id = self._seg_id(seqlens, T, q.device)
 
         def score_mod(score, b, h, q_idx, kv_idx):
@@ -379,8 +377,8 @@ class InklingSelfAttention(SelfAttention):
             return m
 
         block_mask = self._block_mask(mask_mod, T, T, (T, tuple(seqlens) if seqlens else None, is_local), q.device)
-        qf = q.permute(1, 0, 2).unsqueeze(0)  # [1,nh_l,T,hd]
-        kf = k.permute(1, 0, 2).unsqueeze(0)  # [1,nkv_l,T,hd]
+        qf = q.permute(1, 0, 2).unsqueeze(0)
+        kf = k.permute(1, 0, 2).unsqueeze(0)
         vf = v.permute(1, 0, 2).unsqueeze(0)
         out = _flex()(
             qf,
@@ -396,8 +394,8 @@ class InklingSelfAttention(SelfAttention):
     def _seg_cp_flex(self, q, k, v, r, seqlens, q_off, T_full):
         T_loc, nh_l, hd = q.shape
         RE, W, is_local = self.rel_extent, self.window[0], self.is_local
-        rl = torch.einsum("thd,de->the", r.float(), self.rel_proj.float())  # [T_loc,nh_l,RE]
-        rel_logits = rl.permute(1, 0, 2).contiguous()  # [nh_l,T_loc,RE]
+        rl = torch.einsum("thd,de->the", r.float(), self.rel_proj.float())
+        rel_logits = rl.permute(1, 0, 2).contiguous()
         seg = self._seg_id(seqlens, T_full, q.device)
 
         def score_mod(score, b, h, q_idx, kv_idx):
@@ -424,8 +422,8 @@ class InklingSelfAttention(SelfAttention):
             (T_loc, T_full, tuple(seqlens) if seqlens else None, is_local, q_off),
             q.device,
         )
-        qf = q.permute(1, 0, 2).unsqueeze(0)  # [1,nh_l,T_loc,hd]
-        kf = k.permute(1, 0, 2).unsqueeze(0)  # [1,nkv_l,T_full,hd]
+        qf = q.permute(1, 0, 2).unsqueeze(0)
+        kf = k.permute(1, 0, 2).unsqueeze(0)
         vf = v.permute(1, 0, 2).unsqueeze(0)
         out = _flex()(
             qf,
@@ -504,20 +502,20 @@ class InklingRouter(TopKRouter):
         self._maintain_float32_expert_bias()
         H = input.shape[-1]
         nr, topk = self.config.num_moe_experts, self.topk
-        logits = self.gating(input).view(-1, nr).float()  # [T, nr]
-        shared_logits = input.reshape(-1, H).float() @ self.shared_gate.float().t()  # [T, ns]
-        score = logits.sigmoid() + self.expert_bias.float()  # [T, nr]
+        logits = self.gating(input).view(-1, nr).float()
+        shared_logits = input.reshape(-1, H).float() @ self.shared_gate.float().t()
+        score = logits.sigmoid() + self.expert_bias.float()
         from miles.utils.replay_base import routing_replay_manager
 
         _sel_topk = routing_replay_manager.get_topk_fn(lambda s, k: s.topk(k, dim=-1).indices, return_probs=False)
-        topk_ids = _sel_topk(score, topk).long()  # [T, topk]
-        sel_logits = logits.gather(-1, topk_ids)  # [T, topk]
-        active = torch.cat([sel_logits, shared_logits], dim=-1)  # [T, topk+ns]
+        topk_ids = _sel_topk(score, topk).long()
+        sel_logits = logits.gather(-1, topk_ids)
+        active = torch.cat([sel_logits, shared_logits], dim=-1)
         lp = F.logsigmoid(active)
         w = torch.softmax(lp, dim=-1) * float(self.config.inkling.route_scale) * self.global_scale.float()
-        routed_w, shared_w = w[:, :topk], w[:, topk:]  # [T,topk], [T,ns]
-        probs = torch.zeros_like(logits).scatter(-1, topk_ids, routed_w)  # [T, nr]
-        routing_map = torch.zeros_like(logits, dtype=torch.bool).scatter(-1, topk_ids, True)  # [T, nr] bool
+        routed_w, shared_w = w[:, :topk], w[:, topk:]
+        probs = torch.zeros_like(logits).scatter(-1, topk_ids, routed_w)
+        routing_map = torch.zeros_like(logits, dtype=torch.bool).scatter(-1, topk_ids, True)
         self.config.inkling._shared_w = shared_w
         self._apply_expert_bias(routing_map, padding_mask)
         if self.config.moe_router_dtype in ("fp32", "fp64"):
@@ -540,7 +538,7 @@ class InklingSharedExperts(MegatronModule):
         )
 
     def forward(self, hidden_states):
-        sw = self.config.inkling._shared_w  # [T, ns]
+        sw = self.config.inkling._shared_w
         s, b, h = hidden_states.shape
         sw_ = sw.view(s, b, -1)
         if self.config.sequence_parallel and ps.get_tensor_model_parallel_world_size() > 1:

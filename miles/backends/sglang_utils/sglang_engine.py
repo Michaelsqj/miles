@@ -746,7 +746,6 @@ def _compute_server_args(
     import os as _os
 
     if _os.environ.get("MILES_SGLANG_DUMMY_LOAD") == "1":
-        # RL fast-init: dummy weights; the pre-rollout megatron->sglang sync provides the real weights.
         kwargs["load_format"] = "dummy"
 
     if sglang_overrides:
@@ -790,7 +789,6 @@ def _compute_server_args(
         if args.lora_adapter_path is not None and kwargs.get("load_format") != "dummy":
             kwargs["lora_paths"] = {LORA_ADAPTER_NAME: args.lora_adapter_path}
         elif args.lora_adapter_path is not None:
-            # Dummy base: adapter arrives via weight-sync, so allocate LoRA buffers but don't set lora_paths.
             logger.info("dummy base load: skipping startup lora_paths; adapter comes via weight-sync")
         else:
             logger.info("No pre-trained LoRA adapter_path provided, will use random initial weights")

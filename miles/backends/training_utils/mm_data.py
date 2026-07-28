@@ -115,7 +115,6 @@ def _batch_has_media_placeholders(
     return any((token_tensor == media_token_id).any().item() for token_tensor in tokens)
 
 
-# Inkling rollout emits one out-of-vocab sentinel per media item; expanded here to in-vocab placeholder runs so train/serve align 1:1.
 INKLING_IMAGE_SENTINEL_ID = -101
 INKLING_AUDIO_SENTINEL_ID = -102
 INKLING_MM_PLACEHOLDER_TOKEN_ID = 200023
@@ -133,12 +132,12 @@ def _expand_inkling_sample(token_tensor, loss_mask, mm, sample_idx: int):
             "mm_audio_positions",
         ),
     )
-    splices = []  # (pos, run_len, placeholder_id, positions_key)
+    splices = []
     for sentinel, placeholder, counts_key, positions_key in spec:
         counts = mm.get(counts_key) if mm else None
         positions = (token_tensor == sentinel).nonzero(as_tuple=True)[0]
         if positions.numel() == 0:
-            continue  # nothing to expand (text-only sample, or already expanded)
+            continue
         assert counts is not None and positions.numel() == len(counts), (
             f"sample {sample_idx}: {positions.numel()} sentinel(s) {sentinel} but "
             f"{counts_key}={'missing' if counts is None else len(counts)}"
@@ -187,10 +186,9 @@ def _expand_inkling_rollout_data_in_place(rollout_data: RolloutBatch) -> None:
         new_total_lengths.append(expanded.size(0))
 
     if new_total_lengths != old_total_lengths:
-        # Media live in the prompt, so response-aligned fields are unchanged; CP>1 would shift THD shard boundaries.
         try:
             cp_size = get_parallel_state().cp.size
-        except Exception:  # parallel state absent in unit tests
+        except Exception:
             cp_size = 1
         assert cp_size == 1, "Inkling multimodal expansion does not support CP>1 yet"
         rollout_data["tokens"] = new_tokens_list

@@ -49,7 +49,6 @@ _ACC = _PieceAccumulator()
 
 
 def _qkv_tp_size(args):
-    # live tp group degree the gather used; fall back to the arg only when offline
     try:
         from miles.backends.training_utils.parallel import get_parallel_state
 
@@ -61,7 +60,7 @@ def _qkv_tp_size(args):
 def _qkv_blocks_from_gathered(args, layer_idx: int, param: torch.Tensor):
     """Reconstruct full q|k|v|r from TP-all-gathered [q0|k0|v0|r0 | q1|k1|v1|r1 | ...] blocks."""
     nh, nkv, hd, d_rel = _attn_geometry(args, layer_idx)
-    full = [nh * hd, nkv * hd, nkv * hd, nh * d_rel]  # full (un-sharded) q|k|v|r row counts
+    full = [nh * hd, nkv * hd, nkv * hd, nh * d_rel]
     full_rows = sum(full)
     rows = param.shape[0]
 
@@ -78,19 +77,18 @@ def _qkv_blocks_from_gathered(args, layer_idx: int, param: torch.Tensor):
     assert full_rows % tp == 0, f"qkvr layer {layer_idx}: full rows {full_rows} not divisible by tp {tp}"
     nh_l = nh // tp
     nkv_l = max(1, nkv // tp)
-    per = [nh_l * hd, nkv_l * hd, nkv_l * hd, nh_l * d_rel]  # per-rank block row counts
+    per = [nh_l * hd, nkv_l * hd, nkv_l * hd, nh_l * d_rel]
     assert sum(per) * tp == full_rows, (
         f"qkvr layer {layer_idx}: per-rank block {per} x tp {tp} = {sum(per)*tp} != full rows "
         f"{full_rows}. Likely nkv({nkv}) < tp({tp}) (kv-head replication), which this de-shard "
         f"does not handle -- the model keeps nkv>=tp at train time (global nkv=8, local nkv=16)."
     )
-    shards = param.split(sum(per), dim=0)  # one [q_i|k_i|v_i|r_i] per rank
-    blk = [s.split(per, dim=0) for s in shards]  # blk[rank] = (q_i, k_i, v_i, r_i)
+    shards = param.split(sum(per), dim=0)
+    blk = [s.split(per, dim=0) for s in shards]
     return tuple(torch.cat([blk[i][j] for i in range(tp)], dim=0) for j in range(4))
 
 
 def _reinterleave_w13(w13: torch.Tensor) -> torch.Tensor:
-    # fc1 [gate; up] -> HF interleaved [g0,u0,g1,u1,...]
     two_i = w13.shape[0]
     assert two_i % 2 == 0, f"w13 first dim must be even, got {two_i}"
     half = two_i // 2
@@ -107,7 +105,7 @@ _GLOBAL_MAPPING = {
 
 
 def convert_inkling_to_hf(args, name, param):
-    mc = strip_param_name_prefix(name)  # drop module.module.
+    mc = strip_param_name_prefix(name)
 
     if mc in _GLOBAL_MAPPING:
         return [(_GLOBAL_MAPPING[mc], param)]
@@ -149,7 +147,6 @@ def convert_inkling_to_hf(args, name, param):
     if rest == "mlp.mlp_sconv.weight":
         return [(hp + "mlp_sconv.weight", param)]
 
-    # dense MLP: fc1<->w13_dn, fc2<->w2_md, fused norm<->mlp_norm
     if rest == "mlp.linear_fc1.layer_norm_weight":
         return [(hp + "mlp_norm.weight", param)]
     if rest == "mlp.linear_fc1.weight":
@@ -159,7 +156,6 @@ def convert_inkling_to_hf(args, name, param):
     if rest == "mlp.global_scale":
         return [(hp + "mlp.global_scale", param)]
 
-    # gate.weight = concat([router.weight ; router.shared_gate])
     gate_sub = {"mlp.router.weight": 0, "mlp.router.shared_gate": 1}.get(rest)
     if gate_sub is not None:
         out = _ACC.put("gate", layer, gate_sub, param, 2)
@@ -171,7 +167,6 @@ def convert_inkling_to_hf(args, name, param):
     if rest == "mlp.router.global_scale":
         return [(hp + "mlp.gate.global_scale", param)]
 
-    # routed experts: per-index emission; weight{j} is the global expert index
     em = re.match(r"mlp\.experts\.(linear_fc1|linear_fc2)\.weight(\d+)", rest)
     if em is not None:
         which, j = em.group(1), int(em.group(2))
@@ -187,15 +182,14 @@ def convert_inkling_to_hf(args, name, param):
                 f"({2 * inter}). The gathered expert is not the full contiguous [gate; up] this "
                 f"converter assumes (ETP must be 1; no TP split on the expert intermediate dim)."
             )
-            gate, up = param.chunk(2, dim=0)  # megatron gated fc1 = [gate(0:I); up(I:2I)]
+            gate, up = param.chunk(2, dim=0)
             return [
                 (hp + f"mlp.experts.{j}.gate_proj.weight", gate),
                 (hp + f"mlp.experts.{j}.up_proj.weight", up),
             ]
-        else:  # linear_fc2
+        else:
             return [(hp + f"mlp.experts.{j}.down_proj.weight", param)]
 
-    # shared experts: experts.{e}.linear_fc{1,2}.weight -> stacked over ns
     sm = re.match(r"mlp\.shared_experts\.experts\.(\d+)\.(linear_fc1|linear_fc2)\.weight", rest)
     if sm is not None:
         e, which = int(sm.group(1)), sm.group(2)
@@ -205,7 +199,7 @@ def convert_inkling_to_hf(args, name, param):
             if out is None:
                 return []
             return [(hp + "mlp.shared_experts.shared_w13_weight", torch.stack(out, dim=0))]
-        else:  # linear_fc2
+        else:
             out = _ACC.put("shared_fc2", layer, e, param, ns)
             if out is None:
                 return []

@@ -69,7 +69,6 @@ def _pp_assemble_full_adapter(
             off = 0
             for n, shape in entries:
                 k = math.prod(shape)
-                # tensors replicated across stages resolve to the last copy (identical by construction)
                 merged[n] = flat[off : off + k].view(shape)
                 off += k
     return sorted(merged.items())
@@ -243,12 +242,6 @@ class UpdateWeightFromTensor:
 
         rank = dist.get_rank()
 
-        # LoRA never mutates the base. With any path that retains it on the rollout
-        # side (distributed keeps it on GPU; colocate + cpu_backup keeps a host
-        # mirror across pause/resume; colocate without rollout offload never evicts
-        # it), we can skip the base sync entirely and the surrounding
-        # restore_weights_before_load / post_process_quantization calls that would
-        # otherwise prep / re-quantize fresh base bytes.
         # TODO: implement lora weight checker
         colocate_base_persistent = getattr(self.args, "colocate", False) and not getattr(
             self.args, "offload_rollout", True
@@ -305,7 +298,6 @@ class UpdateWeightFromTensor:
                     "the Megatron-Bridge or SGLang version is incompatible."
                 )
 
-            # Assemble the full adapter on every rank before serializing.
             accumulated_named_tensors = _pp_assemble_full_adapter(accumulated_named_tensors)
 
             refs, long_lived_tensors = self._send_lora_params(accumulated_named_tensors)
@@ -313,7 +305,6 @@ class UpdateWeightFromTensor:
             _check_weight_sync_results(results, is_lora=True)
             del long_lived_tensors
             del accumulated_named_tensors
-            # Reclaim producer IPC storages now to avoid OOM on the next step.
             torch.cuda.ipc_collect()
             torch.cuda.empty_cache()
 
@@ -401,7 +392,6 @@ class UpdateWeightFromTensor:
         if self.use_distribute and self._is_distributed_src_rank:
             raise NotImplementedError("LoRA weight sync is not yet supported for distributed (non-colocated) engines")
 
-        # Adapter-only sync: the full unsharded adapter goes to the engine, which shards it per TP rank internally.
         refs, long_lived_tensors = _send_to_colocated_engine(
             hf_named_tensors=hf_named_tensors,
             ipc_engine=self._ipc_engine,
@@ -411,9 +401,6 @@ class UpdateWeightFromTensor:
             lora_name=LORA_ADAPTER_NAME,
             lora_loaded=self._lora_loaded,
             check_equal=getattr(self.args, "check_lora_weight_equal", False),
-            # Only when the training actor is offload-managed are the adapter storages
-            # cuMem-backed and thus not IPC-exportable. Skipping the copy otherwise keeps
-            # the peak memory of every already-working configuration unchanged.
             repack_lora_for_ipc=getattr(self.args, "offload_train", False),
         )
         self._lora_loaded = True
@@ -440,7 +427,6 @@ def _repack_onto_fresh_storage(
     """
     groups: dict[tuple[torch.dtype, torch.device], list[tuple[str, torch.Tensor]]] = {}
     for name, tensor in named_tensors:
-        # Non-CUDA tensors are not shared by handle, so leave them where they are.
         if tensor.is_cuda:
             groups.setdefault((tensor.dtype, tensor.device), []).append((name, tensor))
 
@@ -454,8 +440,6 @@ def _repack_onto_fresh_storage(
             views[name] = view
             offset += tensor.numel()
 
-    # Keep the caller's ordering so the payload differs from the pre-repack one only in
-    # which storage each tensor points at.
     return {name: views.get(name, tensor) for name, tensor in named_tensors}
 
 
@@ -482,8 +466,6 @@ def _send_to_colocated_engine(
     long_live_tensors = []
 
     if is_lora:
-        # Serialize the named dict directly (no FlattenedTensorBucket) so the engine
-        # receives the whole unsharded adapter and shards it per TP rank itself.
         payload = _repack_onto_fresh_storage(hf_named_tensors) if repack_lora_for_ipc else dict(hf_named_tensors)
         long_live_tensors.append(payload)
         converted_named_tensors_by_dtypes = {}
@@ -519,15 +501,11 @@ def _send_to_colocated_engine(
     refs = []
     if is_gather_src:
         if is_lora:
-            # Unload before (re)loading: the engine rejects a duplicate adapter name.
             try:
                 ray.get(ipc_engine.unload_lora_adapter.remote(lora_name=lora_name))
             except Exception as _unload_err:  # noqa: BLE001 - first sync: nothing to unload
                 logger.debug("lora unload before load skipped: %s", _unload_err)
 
-            # (Yusheng) to-do: need to add ci test acc here - now it will pass but fail to update lora weights
-
-            # Per-rank transport: engine TP rank j deserializes the bucket of the train rank sharing its GPU.
             expected_checksums = None
             if check_equal:
                 expected_checksums = {

@@ -7,7 +7,6 @@ from mbridge.models import Qwen2MoEBridge
 
 
 def _deinterleave_w13(w13: torch.Tensor) -> torch.Tensor:
-    # HF interleaved fc1 [g0,u0,...] -> megatron [gates; ups]
     gate = w13[0::2]
     up = w13[1::2]
     return torch.cat([gate, up], dim=0)
@@ -36,7 +35,6 @@ class InklingBridge(Qwen2MoEBridge):
         "self_attention.rel_proj": ["model.llm.layers.{layer_number}.attn.rel_logits_proj.proj"],
         "self_attention.k_sconv.weight": ["model.llm.layers.{layer_number}.attn.k_sconv.weight"],
         "self_attention.v_sconv.weight": ["model.llm.layers.{layer_number}.attn.v_sconv.weight"],
-        # attn_sconv is layer-level (post linear_proj), NOT under .attn
         "self_attention.attn_sconv.weight": ["model.llm.layers.{layer_number}.attn_sconv.weight"],
     }
 
@@ -106,14 +104,12 @@ class InklingBridge(Qwen2MoEBridge):
         return convert_names
 
     def _weight_to_mcore_format(self, mcore_weights_name: str, hf_weights: list[torch.Tensor]) -> torch.Tensor:
-        # linear_qkv = cat([wq, wk, wv, wr], dim 0)
         if "self_attention.linear_qkv." in mcore_weights_name and "layer_norm" not in mcore_weights_name:
             assert len(hf_weights) == 4, f"qkvr expects 4 HF tensors, got {len(hf_weights)}"
             if getattr(self, "dtype", None) is not None:
                 hf_weights = [w.to(self.dtype) if w.dtype != self.dtype else w for w in hf_weights]
             return torch.cat(hf_weights, dim=0).contiguous()
 
-        # router.weight = gate.weight[:nr]; router.shared_gate = gate.weight[nr:nr+ns]
         if mcore_weights_name.endswith("mlp.router.weight"):
             assert len(hf_weights) == 1
             tc = self._get_text_config()
@@ -131,14 +127,13 @@ class InklingBridge(Qwen2MoEBridge):
             if getattr(self, "dtype", None) is not None and w.dtype != self.dtype:
                 w = w.to(self.dtype)
             return w[nr : nr + ns].contiguous()
-        if mcore_weights_name.endswith("global_scale"):  # global_scale keeps source dtype (fp32, no cast)
+        if mcore_weights_name.endswith("global_scale"):
             assert len(hf_weights) == 1
             return hf_weights[0].reshape(1).contiguous()
         if mcore_weights_name.endswith("mlp.router.expert_bias"):
             assert len(hf_weights) == 1
             return hf_weights[0].contiguous()
 
-        # routed experts: index fused 3-D HF tensor by GLOBAL eid = ep_rank*num_local + local
         def _global_eid(name):
             nr = self._get_text_config().n_routed_experts
             return self.mpu.ep_rank * (nr // self.mpu.ep_size) + int(name.split("weight")[-1])
@@ -148,7 +143,6 @@ class InklingBridge(Qwen2MoEBridge):
         if "mlp.experts.linear_fc2" in mcore_weights_name and len(hf_weights) == 1 and hf_weights[0].dim() == 3:
             return hf_weights[0][_global_eid(mcore_weights_name)].contiguous()
 
-        # shared experts: fused [ns, ...] HF tensor -> expert e (de-interleave fc1)
         sm = re.search(r"mlp\.shared_experts\.experts\.(\d+)\.(linear_fc1|linear_fc2)\.weight", mcore_weights_name)
         if sm is not None and len(hf_weights) == 1 and hf_weights[0].dim() == 3:
             e = int(sm.group(1))
@@ -158,7 +152,6 @@ class InklingBridge(Qwen2MoEBridge):
                 w = _deinterleave_w13(w)
             return w.contiguous()
 
-        # dense MLP fc1 <- w13_dn (de-interleave [g0,u0,..]->[gates;ups]); fc2 <- w2_md
         if mcore_weights_name.endswith("mlp.linear_fc1.weight") and len(hf_weights) == 1 and hf_weights[0].dim() == 2:
             w = hf_weights[0]
             if getattr(self, "dtype", None) is not None and w.dtype != self.dtype:
@@ -186,7 +179,6 @@ class InklingBridge(Qwen2MoEBridge):
             and "layer_norm" not in mcore_weights_name
         ):
             tc = self._get_text_config()
-            # total = q(nh*hd) + 2*kv + r(nh*d_rel); derive kv from row count, not is_local
             nh = int(tc.num_attention_heads)
             hd = int(tc.head_dim)
             d_rel = int(getattr(tc, "d_rel", 16) or 16)

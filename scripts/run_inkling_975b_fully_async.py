@@ -36,14 +36,12 @@ class ScriptArgs(U.ExecuteTrainConfig):
 
     hf_checkpoint: str | None = None
     torch_dist: str | None = None
-    # Defaults to torch_dist. Set explicitly when shared NFS -> per-node local NVMe copy is needed.
     torch_dist_local: str | None = None
     model_dir: str = "/root/models"
     data_dir: str = "/root/datasets"
     save_dir: str | None = None
     megatron_path: str = "/root/Megatron-LM"
 
-    # performance configs
     num_gpus_per_node: int = 4
     rollout_num_nodes: int = 4
     lr: float = 1e-6
@@ -56,7 +54,6 @@ class ScriptArgs(U.ExecuteTrainConfig):
 
     enable_r3: bool = True
 
-    # pass any extra sglang/miles/megatron args through `--extra-args '--your-arg'`
     extra_args: str = ""
 
     def __post_init__(self):
@@ -77,7 +74,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
     that fit your compute can be supplied via --extra-args."""
     total_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
 
-    if total_gpus == 32:  # 8 nodes x 4 GPUs: 66 = 2x33; EP16 <= TP4 x DP4
+    if total_gpus == 32:
         return (
             "--tensor-model-parallel-size 4 "
             "--sequence-parallel "
@@ -110,7 +107,6 @@ def _train(args: ScriptArgs):
         ckpt_args += f"--save {args.save_dir}/{args.run_id}/checkpoints --save-interval 10 "
 
     rollout_args = (
-        # continuous background generation; training pulls finished groups
         "--rollout-function-path fully_async_rollout.generate_rollout_fully_async "
         "--pause-generation-mode in_place "
         f"--prompt-data {args.data_dir}/dapo-math-17k/dapo-math-17k.jsonl "
@@ -147,16 +143,8 @@ def _train(args: ScriptArgs):
         "--adam-beta1 0.9 "
         "--adam-beta2 0.98 "
         "--use-distributed-optimizer "
-        # bf16 grad accumulation: the 8-node training half holds ~30B expert
-        # params per GPU; an fp32 grad buffer (+66GB) does not fit alongside
-        # bf16 weights and the fp32 master shards. Megatron force-enables fp32
-        # accumulation under bf16 unless --grad-reduce-in-bf16 is set. Watch
-        # train_rollout_logprob_abs_diff for numeric drift.
         "--grad-reduce-in-bf16 "
         "--no-check-for-nan-in-loss-and-grad "
-        # NVMe-streamed optimizer state (GPU-stepped, one bucket resident).
-        # No train-actor disk backup: in the disaggregated split the training
-        # half owns its GPUs and never pauses for the rollout engine.
         f"--optimizer-state-nvme-dir {args.optimizer_nvme_dir} "
         "--optimizer-state-nvme-chunk-mb 256 "
     )
@@ -166,8 +154,6 @@ def _train(args: ScriptArgs):
         "--recompute-granularity full "
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
-        # fixed micro-batches: dynamic token packing exposes a PP-p2p x EP-a2a
-        # NCCL launch-order race on varlen shapes.
         "--micro-batch-size 1 "
     )
 
@@ -175,11 +161,6 @@ def _train(args: ScriptArgs):
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 16 "
-        # Dedicated rollout nodes (no training co-tenant). Weights are 111GB
-        # per GPU (975B bf16 / TP16); 0.80 x 276GB = 221GB static leaves a
-        # ~110GB KV pool (2x the colocated recipe) and ~55GB dynamic headroom
-        # for cuda-graph capture and prefill activations. Concurrency and the
-        # token cap scale with the doubled KV pool.
         "--sglang-mem-fraction-static 0.80 "
         "--sglang-max-running-requests 128 "
         "--sglang-max-total-tokens 655360 "
@@ -217,7 +198,6 @@ def _train(args: ScriptArgs):
         "NCCL_MNNVL_ENABLE": "1",
         "NCCL_NVLS_ENABLE": "0",
         "NCCL_RAS_ENABLE": "0",
-        # make examples/fully_async importable for --rollout-function-path
         "PYTHONPATH": f"{U.repo_base_dir}/examples/fully_async",
     }
     extra_env_vars["PYTHONPATH"] = f"{args.megatron_path}:{extra_env_vars['PYTHONPATH']}"

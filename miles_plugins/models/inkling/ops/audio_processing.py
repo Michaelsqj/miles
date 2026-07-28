@@ -106,7 +106,6 @@ def _mel_basis(sample_rate: int, n_fft: int, n_mels: int) -> torch.Tensor:
     upper = (mel_edges[2:, None] - fft_freqs[None, :]) / mel_widths[1:, None]
     weights = np.maximum(0.0, np.minimum(lower, upper))
 
-    # Slaney area normalization.
     weights *= (2.0 / (mel_edges[2:] - mel_edges[:-2]))[:, None]
     basis = torch.from_numpy(weights.astype(np.float32, copy=False)).contiguous()
     _MEL_BASIS_CACHE[key] = basis

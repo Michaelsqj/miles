@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any
 
-_MODEL_TYPES = ("inkling_mm_model", "inkling_mm_model")  # v0 + final (Inkling) release
+_MODEL_TYPES = ("inkling_mm_model", "inkling_mm_model")
 
 _MESSAGE = {
     "user": "<|message_user|>",

@@ -29,10 +29,9 @@ def sp_residual_conv(config, conv, x_sbh, seqlens):
     slice. Exact because the conv is residual. seqlens must be the FULL-sequence segment lengths."""
     sp = getattr(config, "sequence_parallel", False) and ps.get_tensor_model_parallel_world_size() > 1
     cp, cp_rank, cp_group = cp_world()
-    # tensor_parallel_output_grad=False: backward must SPLIT the grad, not reduce-scatter.
     x = gather_from_sequence_parallel_region(x_sbh, tensor_parallel_output_grad=False) if sp else x_sbh
     if cp > 1:
-        x = cp_all_gather(x, cp_group, cp)  # [s_full, b, h]
+        x = cp_all_gather(x, cp_group, cp)
     s, b, h = x.shape
     x = conv(x.reshape(s * b, h), seqlens).reshape(s, b, h)
     if cp > 1:
@@ -59,6 +58,6 @@ def seqlens_from_packed(packed_seq_params, T):
                 seqlens.append(T - acc)
             acc = T
             break
-    if acc < T:  # trailing pad tokens form their own segment
+    if acc < T:
         seqlens.append(T - acc)
     return seqlens

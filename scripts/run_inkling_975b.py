@@ -43,7 +43,6 @@ import miles.utils.external_utils.command_utils as U
 
 app = typer.Typer()
 
-# Maps --model-name onto the scripts/models/*.sh recipe that execute_train sources.
 _MODEL_REGISTRY = {
     "Inkling": "inkling-975b",
     "Inkling-4layer": "inkling-975b-4layer",
@@ -62,16 +61,13 @@ class ScriptArgs(U.ExecuteTrainConfig):
 
     hf_checkpoint: str | None = None
     torch_dist: str | None = None
-    # Defaults to torch_dist. Set explicitly when shared NFS -> per-node local NVMe copy is needed.
     torch_dist_local: str | None = None
     model_dir: str = "/root/models"
     data_dir: str = "/root/datasets"
     save_dir: str | None = None
     megatron_path: str = "/root/Megatron-LM"
 
-    # performance configs
     num_gpus_per_node: int = 4
-    # One rollout engine spans 2 nodes at 975B; the 4-layer proxy fits on fewer GPUs.
     rollout_num_gpus_per_engine: int = 16
     lr: float | None = None
     rollout_max_response_len: int = 4096
@@ -82,14 +78,12 @@ class ScriptArgs(U.ExecuteTrainConfig):
     actor_num_nodes: int = field(init=False)
     actor_num_gpus_per_node: int = field(init=False)
 
-    # LoRA configs
     lora_rank: int = 32
     lora_alpha: int = 32
     lora_adapter_path: str | None = None
 
     enable_r3: bool = True
 
-    # pass any extra sglang/miles/megatron args through `--extra-args '--your-arg'`
     extra_args: str = ""
 
     def __post_init__(self):
@@ -128,7 +122,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
         )
 
     if args.actor_num_gpus_per_node == 4:
-        if total_gpus == 64:  # 16 nodes x 4 GPUs: 66 = 3x17 + 15
+        if total_gpus == 64:
             return (
                 "--tensor-model-parallel-size 4 "
                 "--sequence-parallel "
@@ -137,7 +131,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
                 "--expert-model-parallel-size 16 "
                 "--expert-tensor-parallel-size 1 "
             )
-        if total_gpus == 48:  # 12 nodes x 4 GPUs: 66 = 3x22
+        if total_gpus == 48:
             return (
                 "--tensor-model-parallel-size 4 "
                 "--sequence-parallel "
@@ -196,7 +190,6 @@ def _train(args: ScriptArgs):
                     f"--eval-max-response-len {args.rollout_max_response_len} "
                 )
         case "geo3k":
-            # structured message lists rendered by the Inkling processor - no chat template
             rollout_args += f"--prompt-data {args.data_dir}/geo3k/geo3k_train.jsonl "
             if args.enable_eval:
                 eval_args = (
@@ -235,9 +228,6 @@ def _train(args: ScriptArgs):
 
     lora_args = ""
     if args.train_mode == "full":
-        # tms disk backup for the paused training actor; fixed micro-batches
-        # (dynamic token packing exposes a PP-p2p x EP-a2a NCCL launch-order
-        # race on varlen shapes).
         optimizer_args += "--offload-train-target disk " f"--offload-train-disk-dir {args.train_offload_disk_dir} "
         perf_args += "--micro-batch-size 1 "
         sglang_args = (
@@ -270,7 +260,6 @@ def _train(args: ScriptArgs):
             "--sglang-max-mamba-cache-size 256 "
         )
         if args.rollout_num_gpus_per_engine >= 16:
-            # A 2-node engine can hold both sides; skipping the offload barrier is faster.
             sglang_args += "--no-offload-rollout --no-offload-train "
 
     sglang_args += (

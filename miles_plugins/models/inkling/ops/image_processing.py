@@ -94,7 +94,7 @@ def _fill_patches_numpy(
     patches[:] = view.reshape(nph * npw, patch_size, patch_size, 3)
 
 
-try:  # serving uses numba; keep it when available, fall back to numpy otherwise
+try:
     from numba import njit
 
     @njit(cache=True)
@@ -187,5 +187,5 @@ class InklingImagePatchifier:
         return {
             "vision_patches_bthwc": vision_patches_bthwc,
             "num_patches": num_patches,
-            "num_tokens": list(num_patches),  # hMLP: one token per patch
+            "num_tokens": list(num_patches),
         }

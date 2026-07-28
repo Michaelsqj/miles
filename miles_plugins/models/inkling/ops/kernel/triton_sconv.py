@@ -5,10 +5,10 @@ import triton.language as tl
 
 @triton.jit
 def _sconv_fwd_kernel(
-    x_ptr,  # [T, D] input dtype
-    w_ptr,  # [D, W]
-    bos_ptr,  # [T] int32 — segment start per token
-    y_ptr,  # [T, D]
+    x_ptr,
+    w_ptr,
+    bos_ptr,
+    y_ptr,
     T,
     D,
     W: tl.constexpr,
@@ -41,23 +41,22 @@ def _sconv_fwd_kernel(
         w_val = tl.load(w_ptr + d_off * W + iw, mask=d_mask, other=0).to(tl.float32)
         acc += tap * w_val[None, :]
 
-    acc += x_cur.to(tl.float32)  # residual LAST (sglang order)
+    acc += x_cur.to(tl.float32)
     tl.store(y_ptr + t_off[:, None] * D + d_off[None, :], acc.to(y_ptr.dtype.element_ty), mask=td_mask)
 
 
 @triton.jit
 def _sconv_bwd_dx_kernel(
-    go_ptr,  # [T, D] grad wrt y (input dtype)
-    w_ptr,  # [D, W]
-    eos_ptr,  # [T] int32 — segment end (exclusive) per token
-    dx_ptr,  # [T, D]
+    go_ptr,
+    w_ptr,
+    eos_ptr,
+    dx_ptr,
     T,
     D,
     W: tl.constexpr,
     BLOCK_T: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
-    # dx[t] = go[t] (residual) + Σ_iw w[:, iw] * go[t + (W-1) - iw]  (same segment)
     t_off = tl.program_id(0) * BLOCK_T + tl.arange(0, BLOCK_T)
     d_off = tl.program_id(1) * BLOCK_D + tl.arange(0, BLOCK_D)
     t_mask = t_off < T
@@ -80,7 +79,7 @@ def _sconv_bwd_dx_kernel(
         acc += g_val * w_val[None, :]
 
     g_cur = tl.load(go_ptr + t_off[:, None] * D + d_off[None, :], mask=td_mask, other=0).to(tl.float32)
-    acc += g_cur  # residual grad
+    acc += g_cur
     tl.store(dx_ptr + t_off[:, None] * D + d_off[None, :], acc.to(dx_ptr.dtype.element_ty), mask=td_mask)
 
 
@@ -100,7 +99,6 @@ def _bos_eos(seqlens, T, device):
 class _SconvFP32Triton(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: torch.Tensor, weight: torch.Tensor, seqlens) -> torch.Tensor:
-        # x [T, C] contiguous; weight [C, 1, W] (megatron _Sconv layout)
         T, D = x.shape
         W = weight.shape[-1]
         xc = x.contiguous()
@@ -124,8 +122,6 @@ class _SconvFP32Triton(torch.autograd.Function):
         if T > 0:
             grid = (triton.cdiv(T, 64), triton.cdiv(D, 128))
             _sconv_bwd_dx_kernel[grid](go, w2, eos, dx, T, D, W=W, BLOCK_T=64, BLOCK_D=128)
-        # dw[d, iw] = Σ_t go32[t, d] * x32[t-(W-1)+iw, d] (in-segment) — torch reductions
-        # (contiguous slices, no gather: x row for token t at shift s is just x[t-s])
         go32 = go.float()
         x32 = xc.float()
         dw = torch.empty(D, W, device=xc.device, dtype=torch.float32)
@@ -135,7 +131,7 @@ class _SconvFP32Triton(torch.autograd.Function):
             if shift == 0:
                 dw[:, iw] = (go32 * x32).sum(0)
             else:
-                valid = (ar[shift:] - shift) >= bos[shift:]  # in-segment mask [T-shift]
+                valid = (ar[shift:] - shift) >= bos[shift:]
                 dw[:, iw] = (go32[shift:] * x32[: T - shift] * valid.unsqueeze(1)).sum(0)
         return dx, dw.reshape(ctx.w_shape).to(w2.dtype), None
 

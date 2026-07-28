@@ -184,7 +184,7 @@ def apply_inkling_lora(model, args):
             ad = Adapter("dense_mlp", hp + "mlp.")
             ref1, ref2 = mlp.linear_fc1.weight, mlp.linear_fc2.weight
             _mk(ad, "fc1_A", ref1, (rank, H), grad_sum="tp", init=a_init)
-            _mk(ad, "fc1_B", ref1, (2 * i_loc, rank))  # [gate_local; up_local] rows
+            _mk(ad, "fc1_B", ref1, (2 * i_loc, rank))
             _mk(ad, "fc2_A", ref2, (rank, i_loc), init=a_init)
             _mk(ad, "fc2_B", ref2, (H, rank), grad_sum=("tp" if sp else None))
             ad.load_meta = dict(dense_i=dense_i, i_loc=i_loc, tp_rank=ps.get_tensor_model_parallel_rank())
@@ -213,7 +213,7 @@ def apply_inkling_lora(model, args):
 
             fc2_mod.forward = dense_fc2_fwd
         else:
-            experts = mlp.experts  # TEGroupedMLP
+            experts = mlp.experts
             e_local = experts.num_local_experts
             moe_i = cfg.moe_ffn_hidden_size
             assert (getattr(cfg, "expert_tensor_parallel_size", 1) or 1) == 1, "Inkling LoRA assumes ETP=1"
@@ -237,10 +237,10 @@ def apply_inkling_lora(model, args):
                 out, bias = _orig(x, m_splits, *a, **kw)
                 xd = _dropout(x, drop_p, _m.training)
                 r = _ad.w1_A.shape[0]
-                s13 = F.linear(xd, torch.cat([_ad.w1_A, _ad.w3_A], 0))  # [N, 2r]
-                g = _grouped_B(s13[..., :r].contiguous(), _ad.w1_B, m_splits)  # [N, I]
+                s13 = F.linear(xd, torch.cat([_ad.w1_A, _ad.w3_A], 0))
+                g = _grouped_B(s13[..., :r].contiguous(), _ad.w1_B, m_splits)
                 u = _grouped_B(s13[..., r:].contiguous(), _ad.w3_B, m_splits)
-                delta = torch.cat([g, u], dim=-1)  # fc1 out layout = [gate_half | up_half]
+                delta = torch.cat([g, u], dim=-1)
                 return torch.add(out, delta, alpha=scale), bias
 
             fc1_mod.forward = experts_fc1_fwd
@@ -250,7 +250,7 @@ def apply_inkling_lora(model, args):
 
             def experts_fc2_fwd(x, m_splits, *a, _orig=orig_efc2, _m=fc2_mod, _ad=ad, **kw):
                 out, bias = _orig(x, m_splits, *a, **kw)
-                s = _grouped_B(_dropout(x, drop_p, _m.training), _ad.w2_A, m_splits)  # [N, r]
+                s = _grouped_B(_dropout(x, drop_p, _m.training), _ad.w2_A, m_splits)
                 delta = F.linear(s, _ad.w2_B)
                 return torch.add(out, delta, alpha=scale), bias
 
@@ -409,18 +409,18 @@ def load_inkling_lora_adapter(model_chunks, adapter_path):
                         _copy(getattr(m, aname), _get(f"{hp}{proj}.lora_A.weight"))
                         B = _get(f"{hp}{proj}.lora_B.weight")
                         _copy(getattr(m, bname), B[t * rows : (t + 1) * rows])
-                    A = _get(f"{hp}wo_ud.lora_A.weight")  # [r, nh*hd], column-shard
+                    A = _get(f"{hp}wo_ud.lora_A.weight")
                     cols = nh_l * hd
                     _copy(m.wo_A, A[:, t * cols : (t + 1) * cols])
                     _copy(m.wo_B, _get(f"{hp}wo_ud.lora_B.weight"))
                 elif m.kind == "dense_mlp":
                     t, dense_i, i_loc = meta["tp_rank"], meta["dense_i"], meta["i_loc"]
                     _copy(m.fc1_A, _get(f"{hp}gate_up_proj.lora_A.weight"))
-                    B = _get(f"{hp}gate_up_proj.lora_B.weight")  # [2*dense_i, r] = [gate; up]
+                    B = _get(f"{hp}gate_up_proj.lora_B.weight")
                     gate = B[:dense_i][t * i_loc : (t + 1) * i_loc]
                     up = B[dense_i:][t * i_loc : (t + 1) * i_loc]
                     _copy(m.fc1_B, torch.cat([gate, up], dim=0))
-                    A2 = _get(f"{hp}down_proj.lora_A.weight")  # [r, dense_i]
+                    A2 = _get(f"{hp}down_proj.lora_A.weight")
                     _copy(m.fc2_A, A2[:, t * i_loc : (t + 1) * i_loc])
                     _copy(m.fc2_B, _get(f"{hp}down_proj.lora_B.weight"))
                 elif m.kind == "experts":
@@ -436,7 +436,7 @@ def load_inkling_lora_adapter(model_chunks, adapter_path):
                     t, ns, moe_i, si_loc = meta["tp_rank"], meta["ns"], meta["moe_i"], meta["si_loc"]
                     _copy(m.w1_A, _get(f"{hp}w1.lora_A.weight"))
                     _copy(m.w3_A, _get(f"{hp}w3.lora_A.weight"))
-                    B1 = _get(f"{hp}w1.lora_B.weight")  # [ns*moe_i, r] expert-major
+                    B1 = _get(f"{hp}w1.lora_B.weight")
                     B3 = _get(f"{hp}w3.lora_B.weight")
                     _copy(
                         m.w1_B,
@@ -446,7 +446,7 @@ def load_inkling_lora_adapter(model_chunks, adapter_path):
                         m.w3_B,
                         torch.stack([B3[j * moe_i + t * si_loc : j * moe_i + (t + 1) * si_loc] for j in range(ns)]),
                     )
-                    A2 = _get(f"{hp}w2.lora_A.weight")  # [r, ns*moe_i] expert-major cols
+                    A2 = _get(f"{hp}w2.lora_A.weight")
                     _copy(
                         m.w2_A,
                         torch.stack([A2[:, j * moe_i + t * si_loc : j * moe_i + (t + 1) * si_loc] for j in range(ns)]),
@@ -475,7 +475,7 @@ class _GatherBatch:
             return self.batch._resolved[self.kind][self.idx]
 
     def __init__(self):
-        self._reqs = {"tp": [], "ep": []}  # (local, cat_dim)
+        self._reqs = {"tp": [], "ep": []}
         self._resolved = {"tp": None, "ep": None}
 
     def tp(self, local, dim):
@@ -579,10 +579,10 @@ def export_inkling_lora_hf_named(model_chunks):
                     ("wv_dv", m.wv_A, m.wv_B),
                     ("wr_du", m.wr_A, m.wr_B),
                 ):
-                    emit(f"{hp}{hf}.lora_A.weight", aten)  # replicated [r,H]
-                    emit_lazy(f"{hp}{hf}.lora_B.weight", batch.tp(bten, 0).get)  # row-shard -> full
-                emit_lazy(f"{hp}wo_ud.lora_A.weight", batch.tp(m.wo_A, 1).get)  # col-shard
-                emit(f"{hp}wo_ud.lora_B.weight", m.wo_B)  # replicated
+                    emit(f"{hp}{hf}.lora_A.weight", aten)
+                    emit_lazy(f"{hp}{hf}.lora_B.weight", batch.tp(bten, 0).get)
+                emit_lazy(f"{hp}wo_ud.lora_A.weight", batch.tp(m.wo_A, 1).get)
+                emit(f"{hp}wo_ud.lora_B.weight", m.wo_B)
             elif m.kind == "dense_mlp":
                 i_loc = m.load_meta["i_loc"]
                 emit(f"{hp}gate_up_proj.lora_A.weight", m.fc1_A)
@@ -592,12 +592,12 @@ def export_inkling_lora_hf_named(model_chunks):
                 emit_lazy(f"{hp}down_proj.lora_A.weight", batch.tp(m.fc2_A, 1).get)
                 emit(f"{hp}down_proj.lora_B.weight", m.fc2_B)
             elif m.kind == "experts":
-                emit(f"{hp}w1.lora_A.weight", m.w1_A.unsqueeze(0))  # shared [1,r,H]
+                emit(f"{hp}w1.lora_A.weight", m.w1_A.unsqueeze(0))
                 emit(f"{hp}w3.lora_A.weight", m.w3_A.unsqueeze(0))
-                emit_lazy(f"{hp}w1.lora_B.weight", batch.ep(m.w1_B, 0).get)  # [256,I,r]
+                emit_lazy(f"{hp}w1.lora_B.weight", batch.ep(m.w1_B, 0).get)
                 emit_lazy(f"{hp}w3.lora_B.weight", batch.ep(m.w3_B, 0).get)
-                emit_lazy(f"{hp}w2.lora_A.weight", batch.ep(m.w2_A, 0).get)  # [256,r,I]
-                emit(f"{hp}w2.lora_B.weight", m.w2_B.unsqueeze(0))  # shared [1,H,r]
+                emit_lazy(f"{hp}w2.lora_A.weight", batch.ep(m.w2_A, 0).get)
+                emit(f"{hp}w2.lora_B.weight", m.w2_B.unsqueeze(0))
             elif m.kind == "shared_experts":
                 ns = m.load_meta["ns"]
                 emit(f"{hp}w1.lora_A.weight", m.w1_A)

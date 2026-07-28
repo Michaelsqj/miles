@@ -256,9 +256,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
             dtype=np.int32,
         )
-        # meta_info.prompt_tokens = engine-side (media-expanded) prompt length.
         _ntok = int(output["meta_info"]["prompt_tokens"]) + len(new_response_tokens) - 1
-        # topk from the buffer, not args.moe_router_topk (custom providers may override it).
         _topk = _re.size // max(1, _ntok * args.num_layers)
         assert _re.size == _ntok * args.num_layers * _topk, (
             f"routed_experts buffer {_re.size} != ntok({_ntok}) x layers({args.num_layers}) x topk({_topk}); "

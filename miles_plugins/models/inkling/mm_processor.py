@@ -111,8 +111,6 @@ def _append_message(
     input_ids.append(tok.encode_special(END_MESSAGE))
 
 
-# Named levels and the 0.99 ceiling mirror sglang serving_chat (values above
-# 0.99 are out-of-distribution for the model and degrade generation).
 _EFFORT_LEVELS = {"none": 0.0, "low": 0.2, "medium": 0.7, "high": 0.9, "xhigh": 0.99, "max": 0.99}
 
 
@@ -201,7 +199,6 @@ class InklingTrainProcessor:
         audio_cfg = cfg.get("audio_config") or {}
         from miles_plugins.models.inkling.ops.audio_processing import InklingAudioDmelExtractor
 
-        # dmel grid must match what the model de-bins with (audio_config)
         self.dmel_extractor = InklingAudioDmelExtractor(
             params={
                 "n_mels": audio_cfg.get("n_mel_bins", 80),
@@ -211,7 +208,6 @@ class InklingTrainProcessor:
         )
         self.tok = _TokenizerAdapter(load_tokenizer(hf_checkpoint, trust_remote_code=True))
 
-    # -- dataset side (duck-type hook in miles.utils.processing_utils.process_vision_info)
     def extract_media(self, prompt: list[dict[str, Any]]) -> dict:
         images, audios = [], []
         for msg in prompt:
@@ -231,8 +227,6 @@ class InklingTrainProcessor:
                     spec = part.get("audio", part.get("audio_url"))
                     if isinstance(spec, dict):
                         spec = spec.get("url")
-                    # keep the raw file bytes: lossless transport to both the
-                    # rollout engine and the train-side dmel extractor
                     if isinstance(spec, str):
                         path = spec[len("file://") :] if spec.startswith("file://") else spec
                         with open(path, "rb") as f:
@@ -243,7 +237,6 @@ class InklingTrainProcessor:
                     audios.append(bytes(spec))
         return {"images": images or None, "audios": audios or None, "videos": None}
 
-    # -- rollout side (call_processor)
     def __call__(self, text=None, images=None, videos=None, audios=None, **kwargs):
         assert videos is None or not videos, "Inkling processor: video inputs unsupported"
         assert isinstance(text, (list, tuple)), (
@@ -270,6 +263,6 @@ class InklingTrainProcessor:
         ), f"Inkling render produced {n_aud_sentinels} audio sentinel(s) but {n_audios} audio(s) given"
         if n_audios:
             feat = self.dmel_extractor.extract(list(audios))
-            out["mm_audio_dmel"] = torch.cat(feat["dmel_bins"], dim=0)  # [sum_T, n_mels] int32
+            out["mm_audio_dmel"] = torch.cat(feat["dmel_bins"], dim=0)
             out["mm_audio_num_tokens"] = torch.tensor(feat["num_audio_tokens"], dtype=torch.long)
         return out

@@ -5,9 +5,9 @@ import triton.language as tl
 
 @triton.jit
 def _swiglu_fwd_kernel(
-    x_ptr,  # [M, 2N] block layout [g | u], input dtype
-    scale_ptr,  # [M] fp32 or dummy
-    y_ptr,  # [M, N] output dtype
+    x_ptr,
+    scale_ptr,
+    y_ptr,
     M,
     N,
     HAS_SCALE: tl.constexpr,
@@ -32,11 +32,11 @@ def _swiglu_fwd_kernel(
 
 @triton.jit
 def _swiglu_bwd_kernel(
-    x_ptr,  # [M, 2N] block layout, input dtype
-    scale_ptr,  # [M] fp32 or dummy
-    go_ptr,  # [M, N] grad_out, output dtype
-    dx_ptr,  # [M, 2N] d_fc1 (input dtype)
-    dscale_ptr,  # [M] fp32 partial (or dummy)
+    x_ptr,
+    scale_ptr,
+    go_ptr,
+    dx_ptr,
+    dscale_ptr,
     M,
     N,
     HAS_SCALE: tl.constexpr,

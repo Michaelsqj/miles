@@ -120,24 +120,23 @@ def sconv_fp32_packed(x: torch.Tensor, weight: torch.Tensor, seqlens) -> torch.T
     xf = x.float()
     w = weight.float()
     xp = F.pad(xf.t().unsqueeze(0), (k - 1, 0))
-    y = xf + F.conv1d(xp, w, groups=C).squeeze(0).t()  # fp32, interior rows correct
+    y = xf + F.conv1d(xp, w, groups=C).squeeze(0).t()
 
     if k > 1:
         dev = x.device
         sl = torch.as_tensor(list(seqlens), device=dev, dtype=torch.long)
-        starts = sl.cumsum(0)[:-1]  # segment starts for segments 1..S-1
+        starts = sl.cumsum(0)[:-1]
         lens = sl[1:]
-        ds = torch.arange(k - 1, device=dev)  # boundary row offsets within a segment
-        t_idx = starts.view(-1, 1) + ds.view(1, -1)  # [S-1, k-1] global row ids
+        ds = torch.arange(k - 1, device=dev)
+        t_idx = starts.view(-1, 1) + ds.view(1, -1)
         valid = ds.view(1, -1) < lens.view(-1, 1)
-        xw = xf[t_idx.clamp(max=T - 1)]  # [S-1, k-1, C] rows s+0 .. s+k-2
-        # W2[d, i, c] = w[c, k-1-(d-i)] for i<=d else 0: y[s+d] = x[s+d] + Σ_i xw[:,i]·W2[d,i]
-        wt = w.squeeze(1).t()  # [k, C]
+        xw = xf[t_idx.clamp(max=T - 1)]
+        wt = w.squeeze(1).t()
         W2 = x.new_zeros(k - 1, k - 1, C, dtype=torch.float32)
         for d in range(k - 1):
             for i in range(d + 1):
                 W2[d, i] = wt[k - 1 - (d - i)]
-        corr = torch.einsum("sic,dic->sdc", xw, W2)  # [S-1, k-1, C] fp32
+        corr = torch.einsum("sic,dic->sdc", xw, W2)
         y = y.index_put((t_idx[valid],), (xw + corr)[valid])
 
     return y.to(x.dtype)

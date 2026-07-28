@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 class AtomicUpdateGroup:
     key: str
     suffixes: tuple[str, ...]
-    # Groups whose suffixes only exist on some layers (e.g. MoE-only groups) legitimately
-    # match nothing on a PP rank that holds none of those layers. Everything else should
-    # still fail loudly, since an unmatched group is normally a mistyped suffix.
     optional: bool = False
 
 
@@ -228,7 +225,6 @@ def all_gather_params_async(
                 tp_group = get_parallel_state().tp.group
 
             if tp_size <= 1:
-                # Size-1 group: skip the no-op all_gather; interleaving it with the EP-broadcast comm can NCCL-deadlock.
                 gather_tasks.append((info, param.data, None, None, None, None))
                 handles.append(None)
                 continue
