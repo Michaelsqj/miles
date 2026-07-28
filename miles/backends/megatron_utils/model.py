@@ -1024,7 +1024,7 @@ def initialize_model_and_optimizer(
         load_ctx = nullcontext()
 
     # Skip load_checkpoint when --load has no real checkpoint, keeping the provider-initialized weights.
-    if _has_real_ckpt(args.load):
+    if _has_real_ckpt(getattr(args, "load", None)):
         with load_ctx:
             iteration, _ = load_checkpoint(
                 model,
