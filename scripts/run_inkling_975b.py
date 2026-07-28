@@ -235,14 +235,10 @@ def _train(args: ScriptArgs):
 
     lora_args = ""
     if args.train_mode == "full":
-        # NVMe-streamed optimizer state (GPU-stepped, one bucket resident) + tms
-        # disk backup for the paused training actor; fixed micro-batches (dynamic
-        # token packing exposes a PP-p2p x EP-a2a NCCL launch-order race on
-        # varlen shapes).
-        optimizer_args += (
-            "--offload-train-target disk "
-            f"--offload-train-disk-dir {args.train_offload_disk_dir} "
-        )
+        # tms disk backup for the paused training actor; fixed micro-batches
+        # (dynamic token packing exposes a PP-p2p x EP-a2a NCCL launch-order
+        # race on varlen shapes).
+        optimizer_args += "--offload-train-target disk " f"--offload-train-disk-dir {args.train_offload_disk_dir} "
         perf_args += "--micro-batch-size 1 "
         sglang_args = (
             f"--rollout-num-gpus-per-engine {args.rollout_num_gpus_per_engine} "

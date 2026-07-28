@@ -27,7 +27,6 @@ def _callback():
     """Keep `train` as an explicit subcommand (typer collapses single-command apps)."""
 
 
-
 @dataclass
 class ScriptArgs(U.ExecuteTrainConfig):
     run_id: str = U.create_run_id()
