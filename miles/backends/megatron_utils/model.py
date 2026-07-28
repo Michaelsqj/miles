@@ -1023,8 +1023,11 @@ def initialize_model_and_optimizer(
     else:
         load_ctx = nullcontext()
 
-    # Skip load_checkpoint when --load has no real checkpoint, keeping the provider-initialized weights.
-    if _has_real_ckpt(getattr(args, "load", None)):
+    # Skip load_checkpoint when --load is staged but holds no real checkpoint, keeping the
+    # provider-initialized weights. An unset --load is not that case: setup_model_and_optimizer
+    # has already asserted a pretrained_checkpoint is there instead, so let Megatron load it.
+    load_dir = getattr(args, "load", None)
+    if load_dir is None or _has_real_ckpt(load_dir):
         with load_ctx:
             iteration, _ = load_checkpoint(
                 model,
@@ -1036,7 +1039,7 @@ def initialize_model_and_optimizer(
     else:
         if is_first_replica_megatron_main_rank():
             logger.warning(
-                "[inkling] no real checkpoint at args.load=%r; using model_provider-initialized weights", args.load
+                "[inkling] no real checkpoint at args.load=%r; using model_provider-initialized weights", load_dir
             )
         iteration = 0
 
