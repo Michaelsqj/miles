@@ -273,14 +273,12 @@ def _train(args: ScriptArgs):
             "--sglang-cuda-graph-max-bs 64 "
             "--sglang-max-mamba-cache-size 256 "
         )
-        # Required, not a tuning choice: the adapter sync serializes the live LoRA
-        # parameters and hands SGLang a CUDA IPC handle for each storage (see
-        # _send_to_colocated_engine). torch_memory_saver allocates through cuMem, and
-        # those allocations cannot be exported over the legacy IPC API, so leaving
-        # offload on makes the first weight sync die with
-        # "torch.AcceleratorError: CUDA error: invalid argument". Both sides therefore
-        # have to stay resident, which is why this path needs the GPUs to hold them.
-        sglang_args += "--no-offload-rollout --no-offload-train "
+        if args.rollout_num_gpus_per_engine >= 16:
+            # A 2-node engine has the headroom to keep both sides resident, and skipping
+            # the offload barrier is worth a lot per step. Smaller engines take the
+            # barrier so they fit; the adapter sync repacks onto fresh storage, so it
+            # works either way (see _repack_onto_fresh_storage).
+            sglang_args += "--no-offload-rollout --no-offload-train "
 
     sglang_args += (
         "--sglang-attention-backend fa4 "
