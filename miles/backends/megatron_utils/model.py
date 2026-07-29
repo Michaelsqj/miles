@@ -57,17 +57,9 @@ from .parallel import get_packed_seq_params
 logger = logging.getLogger(__name__)
 
 
-def _has_real_ckpt(load_dir: str | None) -> bool:
-    """True when ``--load`` points at a loadable dist-checkpoint (an ``iter_*`` or ``release`` dir)."""
-    if not load_dir:
-        return False
-    path = Path(load_dir)
-    if not path.exists():
-        return False
-    for candidate in list(path.glob("iter_*")) + list(path.glob("release")):
-        if (candidate / "common.pt").exists() or any(candidate.glob("*.distcp")):
-            return True
-    return False
+def _has_loadable_ckpt(load_dir: str | None) -> bool:
+    """Whether ``--load`` holds anything; ``load_checkpoint`` dispatches dist vs HF itself."""
+    return bool(load_dir) and Path(load_dir).is_dir() and any(Path(load_dir).iterdir())
 
 
 from .bridge_lora_helpers import _ensure_model_list, _setup_lora_model_via_bridge  # noqa: F401
@@ -1021,12 +1013,9 @@ def initialize_model_and_optimizer(
         load_ctx = nullcontext()
 
     load_dir = getattr(args, "load", None)
-    # Only raw mode may start from provider-initialized weights when --load holds no
-    # dist checkpoint. Bridge runs legitimately point --load at an HF checkpoint dir,
-    # which has no iter_*/release, and skipping their load leaves the model on whatever
-    # the provider produced -- which then gets synced to the engine as the base weights.
-    tolerate_missing_ckpt = getattr(args, "megatron_to_hf_mode", None) != "bridge"
-    if load_dir is None or not tolerate_missing_ckpt or _has_real_ckpt(load_dir):
+    # An unset --load is Megatron's business: setup_model_and_optimizer has already
+    # asserted a pretrained_checkpoint stands in for it.
+    if load_dir is None or _has_loadable_ckpt(load_dir):
         with load_ctx:
             iteration, _ = load_checkpoint(
                 model,
@@ -1037,9 +1026,7 @@ def initialize_model_and_optimizer(
             )
     else:
         if is_first_replica_megatron_main_rank():
-            logger.warning(
-                "[inkling] no real checkpoint at args.load=%r; using model_provider-initialized weights", load_dir
-            )
+            logger.warning("--load %r is empty; starting from model_provider-initialized weights", load_dir)
         iteration = 0
 
     if (
