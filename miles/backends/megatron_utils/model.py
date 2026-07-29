@@ -1021,7 +1021,12 @@ def initialize_model_and_optimizer(
         load_ctx = nullcontext()
 
     load_dir = getattr(args, "load", None)
-    if load_dir is None or _has_real_ckpt(load_dir):
+    # Only raw mode may start from provider-initialized weights when --load holds no
+    # dist checkpoint. Bridge runs legitimately point --load at an HF checkpoint dir,
+    # which has no iter_*/release, and skipping their load leaves the model on whatever
+    # the provider produced -- which then gets synced to the engine as the base weights.
+    tolerate_missing_ckpt = getattr(args, "megatron_to_hf_mode", None) != "bridge"
+    if load_dir is None or not tolerate_missing_ckpt or _has_real_ckpt(load_dir):
         with load_ctx:
             iteration, _ = load_checkpoint(
                 model,
