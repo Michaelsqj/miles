@@ -6,6 +6,9 @@ Supports:
                           Verified profiles: 16 nodes x 4 GPUs (TP4 PP4 EP16) and
                           12 nodes x 4 GPUs (TP4 PP3 EP16) on GB300.
   - Inkling-4layer   4-layer slice for single-node smoke testing.
+  - Inkling-Small    42-layer 276B MoE. Verified profile: 4 nodes x 8 GPUs
+                          (TP4 SP PP8 EP4, ctx 4096 / response 2048) on H200, full
+                          (--optimizer-cpu-offload trio) and lora (defaults).
 
 Train modes:
   - full   Full-parameter GRPO. Optimizer state streams through node-local NVMe
@@ -46,18 +49,21 @@ app = typer.Typer()
 _MODEL_REGISTRY = {
     "Inkling": "inkling-975b",
     "Inkling-4layer": "inkling-975b-4layer",
+    "Inkling-Small": "inkling-small",
 }
 
 
 @dataclass
 class ScriptArgs(U.ExecuteTrainConfig):
     run_id: str = U.create_run_id()
-    model_name: Literal["Inkling", "Inkling-4layer"] = "Inkling"
+    model_name: Literal["Inkling", "Inkling-4layer", "Inkling-Small"] = "Inkling"
 
     train_mode: Literal["full", "lora"] = "full"
     task: Literal["dapo_math", "geo3k"] = "dapo_math"
     enable_eval: bool = False
     num_rollout: int = 100
+    rollout_batch_size: int = 32
+    global_batch_size: int = 64
 
     hf_checkpoint: str | None = None
     torch_dist: str | None = None
@@ -111,6 +117,17 @@ def _get_parallel_config(args: ScriptArgs) -> str:
     Raises NotImplementedError for untested configurations.
     """
     total_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+
+    if args.model_name == "Inkling-Small" and total_gpus == 32:
+        # TP4 x PP8 -> DP1; 42 = 7x5 + 7; EP<=TP*DP=4 -> 64 experts per rank.
+        return (
+            "--tensor-model-parallel-size 4 "
+            "--sequence-parallel "
+            "--pipeline-model-parallel-size 8 "
+            "--decoder-last-pipeline-num-layers 7 "
+            "--expert-model-parallel-size 4 "
+            "--expert-tensor-parallel-size 1 "
+        )
 
     if args.model_name == "Inkling-4layer" and args.actor_num_nodes == 1:
         return (
@@ -168,11 +185,11 @@ def _train(args: ScriptArgs):
         "--rollout-shuffle "
         "--rm-type math "
         f"--num-rollout {args.num_rollout} "
-        "--rollout-batch-size 32 "
+        f"--rollout-batch-size {args.rollout_batch_size} "
         "--n-samples-per-prompt 8 "
         f"--rollout-max-response-len {args.rollout_max_response_len} "
         "--rollout-temperature 1 "
-        "--global-batch-size 64 "
+        f"--global-batch-size {args.global_batch_size} "
         "--balance-data "
     )
     eval_args = ""
