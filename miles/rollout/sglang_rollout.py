@@ -258,6 +258,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         )
         _ntok = int(output["meta_info"]["prompt_tokens"]) + len(new_response_tokens) - 1
         _topk = _re.size // max(1, _ntok * args.num_layers)
+        if _re.size == (_ntok + 1) * args.num_layers * max(1, _topk):
+            # stop-edge: sglang also forwarded the final token; its routing rows
+            # feed no training position - drop the tail position.
+            _re = _re[: _ntok * args.num_layers * _topk]
         assert _re.size == _ntok * args.num_layers * _topk, (
             f"routed_experts buffer {_re.size} != ntok({_ntok}) x layers({args.num_layers}) x topk({_topk}); "
             f"prompt_tokens={output['meta_info'].get('prompt_tokens')} response={len(new_response_tokens)} "
