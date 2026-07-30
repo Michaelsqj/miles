@@ -80,6 +80,8 @@ def build_inkling_config(
     ns = text_cfg["n_shared_experts"]
     denseI = int(text_cfg.get("dense_intermediate_size", inter))
     cfg = TransformerConfig(
+        hidden_dropout=0.0,
+        attention_dropout=0.0,
         num_layers=text_cfg["num_hidden_layers"],
         hidden_size=text_cfg["hidden_size"],
         num_attention_heads=text_cfg["num_attention_heads"],
