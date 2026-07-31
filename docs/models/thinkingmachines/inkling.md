@@ -32,12 +32,12 @@ docker pull radixark/miles:inkling
 
 # Full-parameter GRPO on 16 nodes x 4 GB300, inside the container
 cd /root/miles
-python scripts/run_inkling_975b.py train \
+python scripts/run_inkling.py train \
    --model-name Inkling --train-mode full --task dapo_math \
    --num-nodes 16 --num-gpus-per-node 4
 
 # LoRA GRPO (rank 32, all-linear), same cluster
-python scripts/run_inkling_975b.py train \
+python scripts/run_inkling.py train \
    --model-name Inkling --train-mode lora --task dapo_math \
    --num-nodes 16 --num-gpus-per-node 4
 ```

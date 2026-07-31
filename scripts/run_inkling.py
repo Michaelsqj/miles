@@ -1,5 +1,5 @@
 """
-Inkling 975B training script.
+Inkling family training script (Inkling 975B / Inkling-Small / 4-layer slice).
 
 Supports:
   - Inkling          66-layer 975B MoE (frozen vision/audio towers optional).
@@ -29,16 +29,16 @@ Tasks:
 Usage patterns:
 
   1. Train on pre-staged checkpoints:
-       python scripts/run_inkling_975b.py train \
+       python scripts/run_inkling.py train \
            --model-name Inkling --train-mode full --task dapo_math \
            --num-nodes 16 --num-gpus-per-node 4
 
   2. Individual steps (rsync shared -> node-local NVMe, then train):
-       python scripts/run_inkling_975b.py prepare-cp --model-name Inkling
-       python scripts/run_inkling_975b.py train --model-name Inkling ...
+       python scripts/run_inkling.py prepare-cp --model-name Inkling
+       python scripts/run_inkling.py train --model-name Inkling ...
 
   3. One-shot (prepare-cp when model_local_dir differs, then train):
-       python scripts/run_inkling_975b.py full-train --model-name Inkling ...
+       python scripts/run_inkling.py full-train --model-name Inkling ...
 """
 
 from dataclasses import dataclass, field
@@ -163,7 +163,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
 
     raise NotImplementedError(
         f"No pre-set parallel config for {total_gpus} GPUs. "
-        f"Please specify your parallel config in `run_inkling_975b._get_parallel_config`."
+        f"Please specify your parallel config in `run_inkling._get_parallel_config`."
     )
 
 

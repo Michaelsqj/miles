@@ -1,6 +1,6 @@
 import os
 
-from scripts.run_inkling_975b import _MODEL_REGISTRY, ScriptArgs, _train
+from scripts.run_inkling import _MODEL_REGISTRY, ScriptArgs, _train
 from tests.ci.ci_register import register_cuda_ci
 from tests.ci.metric_history import register_ci_gate
 
