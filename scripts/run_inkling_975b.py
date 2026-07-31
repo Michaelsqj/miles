@@ -7,8 +7,12 @@ Supports:
                           12 nodes x 4 GPUs (TP4 PP3 EP16) on GB300.
   - Inkling-4layer   4-layer slice for single-node smoke testing.
   - Inkling-Small    42-layer 276B MoE. Verified profile: 4 nodes x 8 GPUs
-                          (TP4 SP PP8 EP4, ctx 4096 / response 2048) on H200, full
-                          (--optimizer-cpu-offload trio) and lora (defaults).
+                          (TP4 SP PP8 EP4, ctx 4096 / response 2048) on H200.
+                          Full: --lr 6e-6, --rollout-batch-size 64 --global-batch-size 128
+                          (reward +0.006/rollout). LoRA: --lr 2e-4 with the same batch
+                          shape (reward +0.011/rollout); at the 5e-6 default the
+                          zero-initialised B factors need hundreds of rollouts to
+                          accumulate a visible delta-W, which reads as "not learning".
 
 Train modes:
   - full   Full-parameter GRPO. Optimizer state streams through node-local NVMe
