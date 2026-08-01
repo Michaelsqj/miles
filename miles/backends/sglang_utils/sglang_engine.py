@@ -750,9 +750,7 @@ def _compute_server_args(
         "enable_metrics": True,
     }
 
-    import os as _os
-
-    if _os.environ.get("MILES_SGLANG_DUMMY_LOAD") == "1":
+    if os.environ.get("MILES_SGLANG_DUMMY_LOAD") == "1":
         kwargs["load_format"] = "dummy"
 
     if sglang_overrides:

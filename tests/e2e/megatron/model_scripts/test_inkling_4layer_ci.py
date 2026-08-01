@@ -11,7 +11,6 @@ register_cuda_ci(
     est_time=1800,
     suite="stage-c-4-gpu-h200",
     labels=["megatron", "model-scripts"],
-    disabled="Needs an image whose SGLang has Inkling support: without sglang.srt.configs.inkling the model_type alias never registers and the HF->torch_dist convert fails on `inkling_mm_model`. Enable once sgl-project/sglang#31358 is in SGLANG_BRANCH.",
 )
 
 register_ci_gate(metric_key="train/grad_norm")

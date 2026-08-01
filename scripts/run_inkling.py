@@ -1,8 +1,8 @@
 """
-Inkling family training script (Inkling 975B / Inkling-Small / 4-layer slice).
+Inkling family training script (Inkling / Inkling-Small / 4-layer slice).
 
 Supports:
-  - Inkling          66-layer 975B MoE (frozen vision/audio towers optional).
+  - Inkling          66-layer MoE (frozen vision/audio towers optional).
                           Verified profiles: 16 nodes x 4 GPUs (TP4 PP4 EP16) and
                           12 nodes x 4 GPUs (TP4 PP3 EP16) on GB300.
   - Inkling-4layer   4-layer slice for single-node smoke testing.
@@ -51,8 +51,8 @@ import miles.utils.external_utils.command_utils as U
 app = typer.Typer()
 
 _MODEL_REGISTRY = {
-    "Inkling": "inkling-975b",
-    "Inkling-4layer": "inkling-975b-4layer",
+    "Inkling": "inkling",
+    "Inkling-4layer": "inkling-4layer",
     "Inkling-Small": "inkling-small",
 }
 

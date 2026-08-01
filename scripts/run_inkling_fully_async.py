@@ -1,4 +1,4 @@
-"""Inkling 975B fully-asynchronous RL (reasoning / dapo-math-17k).
+"""Inkling fully-asynchronous RL (reasoning / dapo-math-17k).
 
 Disaggregated split on 12 x 4 GPU (GB300): 8 training nodes + 4 dedicated
 rollout nodes (one 16-GPU sglang engine). Generation runs continuously in a
@@ -7,7 +7,7 @@ groups; weights are broadcast to the paused engine between versions.
 
 Example:
 
-    MILES_SCRIPT_NUM_NODES=12 python scripts/run_inkling_975b_fully_async.py train \
+    MILES_SCRIPT_NUM_NODES=12 python scripts/run_inkling_fully_async.py train \
         --num-gpus-per-node 4 --num-rollout 100
 """
 
@@ -85,7 +85,7 @@ def _get_parallel_config(args: ScriptArgs) -> str:
 
     raise NotImplementedError(
         f"No pre-set parallel config for {total_gpus} training GPUs. "
-        f"Please specify your parallel config in `run_inkling_975b_fully_async._get_parallel_config`."
+        f"Please specify your parallel config in `run_inkling_fully_async._get_parallel_config`."
     )
 
 
@@ -216,7 +216,7 @@ def _train(args: ScriptArgs):
         train_args=train_args,
         config=args,
         num_gpus_per_node=args.num_gpus_per_node,
-        megatron_model_type="inkling-975b",
+        megatron_model_type="inkling",
         train_script="train_async.py",
         extra_env_vars=extra_env_vars,
         megatron_path=args.megatron_path,

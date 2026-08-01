@@ -22,7 +22,7 @@ cd /root/miles
 
 # Full-parameter GRPO. 276 B fits with the CPU-offloaded optimizer -
 # no NVMe streaming needed (unlike the 975 B recipe).
-python scripts/run_inkling_975b.py train \
+python scripts/run_inkling.py train \
    --model-name Inkling-Small --train-mode full --task dapo_math \
    --num-nodes 4 --num-gpus-per-node 8 \
    --sglang-context-length 4096 --rollout-max-response-len 2048 \
@@ -31,7 +31,7 @@ python scripts/run_inkling_975b.py train \
 
 # LoRA GRPO (rank 32, all-linear), same cluster; adapter-only weight
 # sync swaps in ~4 s per rollout.
-python scripts/run_inkling_975b.py train \
+python scripts/run_inkling.py train \
    --model-name Inkling-Small --train-mode lora --task dapo_math \
    --num-nodes 4 --num-gpus-per-node 8 \
    --sglang-context-length 4096 --rollout-max-response-len 2048

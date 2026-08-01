@@ -1,7 +1,7 @@
 NLAYERS="${MODEL_ARGS_NUM_LAYERS:-42}"
 
 # Inkling-Small 276B config (42 layers; derived from the HF config the same way
-# inkling-975b.sh maps the 975B one).
+# inkling.sh maps the Inkling one).
 MODEL_ARGS=(
     --disable-bias-linear
     --num-layers $NLAYERS

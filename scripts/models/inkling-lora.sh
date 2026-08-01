@@ -1,6 +1,6 @@
-source "$(dirname -- "${BASH_SOURCE[0]}")/inkling-975b.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/inkling.sh"
 
-# Inkling 975B LoRA (r=32, all-linear): adapter-only training and weight sync;
+# Inkling LoRA (r=32, all-linear): adapter-only training and weight sync;
 # the engine serves the adapter natively (triton backend, virtual experts).
 LORA_RANK="${LORA_RANK:-32}"
 

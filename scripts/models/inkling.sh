@@ -1,6 +1,6 @@
 NLAYERS="${MODEL_ARGS_NUM_LAYERS:-66}"
 
-# Inkling 975B config (66L full model; set MODEL_ARGS_NUM_LAYERS=4 for the 4-layer slice)
+# Inkling config (66L full model; set MODEL_ARGS_NUM_LAYERS=4 for the 4-layer slice)
 MODEL_ARGS=(
     --disable-bias-linear
     --num-layers $NLAYERS
