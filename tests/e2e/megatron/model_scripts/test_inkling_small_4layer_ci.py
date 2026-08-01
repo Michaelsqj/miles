@@ -17,6 +17,7 @@ register_ci_gate(metric_key="train/grad_norm")
 register_ci_gate(metric_key="train/ppo_kl")
 register_ci_gate(metric_key="train/train_rollout_logprob_abs_diff")
 register_ci_gate(metric_key="train/train_rollout_kl")
+register_ci_gate(metric_key="rollout/raw_reward")
 
 _MODEL_ORG = "CharyZeng"
 
@@ -24,6 +25,7 @@ _MODEL_ORG = "CharyZeng"
 def _args() -> ScriptArgs:
     return ScriptArgs(
         model_name="Inkling-Small-4layer",
+        inkling_attn_backend="fa4",
         train_mode="full",
         task="dapo_math",
         num_nodes=1,
