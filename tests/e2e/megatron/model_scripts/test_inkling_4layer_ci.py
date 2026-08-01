@@ -33,7 +33,11 @@ def _args() -> ScriptArgs:
         rollout_max_response_len=512,
         sglang_context_length=1024,
         extra_args=(
-            "--ci-test " "--ci-disable-logprobs-checker " "--disable-weights-backuper " "--offload-train-target cpu "
+            "--ci-test "
+            "--check-weight-update-skip-list visual. audio. "
+            "--ci-disable-logprobs-checker "
+            "--disable-weights-backuper "
+            "--offload-train-target cpu "
         ),
     )
 

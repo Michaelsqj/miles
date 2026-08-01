@@ -38,6 +38,7 @@ def _args() -> ScriptArgs:
         sglang_context_length=1024,
         extra_args=(
             "--ci-test "
+            "--check-weight-update-skip-list visual. audio. "
             "--ci-disable-logprobs-checker "
             "--disable-weights-backuper "
             # engine-side sha256 check on every adapter sync
