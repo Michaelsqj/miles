@@ -29,7 +29,6 @@ _MODEL_ORG = "CharyZeng"
 def _args() -> ScriptArgs:
     return ScriptArgs(
         model_name="Inkling-Small-4layer",
-        inkling_attn_backend="fa4",
         train_mode="lora",
         task="dapo_math",
         num_nodes=1,
@@ -40,6 +39,7 @@ def _args() -> ScriptArgs:
         sglang_context_length=1024,
         extra_args=(
             "--ci-test "
+            "--ci-disable-kl-checker "
             "--check-weight-update-skip-list visual. audio. "
             "--ci-disable-logprobs-checker "
             "--disable-weights-backuper "

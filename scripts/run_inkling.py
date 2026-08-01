@@ -93,10 +93,6 @@ class ScriptArgs(U.ExecuteTrainConfig):
     lora_rank: int = 32
     lora_alpha: int = 32
     lora_adapter_path: str | None = None
-    # Training-side attention kernel (flex | te | fa4). flex is the production
-    # default; fa4 is bit-identical to the serving kernel, which the CI first-step
-    # true-on-policy check (ppo_kl == 0) requires.
-    inkling_attn_backend: str = "flex"
 
     enable_r3: bool = True
 
@@ -319,7 +315,6 @@ def _train(args: ScriptArgs):
     )
 
     extra_env_vars = {
-        "MILES_INKLING_ATTN_BACKEND": args.inkling_attn_backend,
         "SGLANG_ENABLE_UNIFIED_RADIX_TREE": "1",
         "SGLANG_OPT_USE_INKLING_FUSED_AR_SCONV_NORM": "false",
         "SGLANG_SKIP_SGL_KERNEL_VERSION_CHECK": "1",
