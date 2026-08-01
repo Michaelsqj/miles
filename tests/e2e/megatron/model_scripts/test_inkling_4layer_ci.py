@@ -23,7 +23,7 @@ _MODEL_ORG = "CharyZeng"
 
 def _args() -> ScriptArgs:
     return ScriptArgs(
-        model_name="Inkling-4layer",
+        model_name="Inkling-Small-4layer",
         train_mode="full",
         task="dapo_math",
         num_nodes=1,
