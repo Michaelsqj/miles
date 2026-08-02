@@ -86,7 +86,13 @@ def apply_inkling_lora(model, args):
         reduce_scatter_to_sequence_parallel_region,
     )
 
+    from miles.backends.megatron_utils.lora_utils import patch_param_grad_buffer_for_colocate_mode_lora
+
     from miles_plugins.models.inkling.layers import InklingDenseMLP, InklingSelfAttention, InklingSharedExperts
+
+    if args.offload_train:
+        # keep adapter param/grad buffers out of the pausable memory-saver region
+        patch_param_grad_buffer_for_colocate_mode_lora()
 
     Adapter = _adapter_cls()
 
