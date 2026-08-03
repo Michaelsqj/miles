@@ -176,6 +176,49 @@ def test_atomic_group_specs_raise_explicit_errors(direct_module, monkeypatch):
             direct_module.get_named_update_units([param.name for param in params], groups)
 
 
+def test_dim0_async_gather_writes_directly_to_final_tensor(direct_module, monkeypatch):
+    from miles.backends.megatron_utils.update_weight import common
+
+    param = torch.nn.Parameter(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), requires_grad=False)
+    param.tensor_model_parallel = True
+    param.partition_dim = 0
+    param.partition_stride = 1
+    info = ParamInfo(
+        name="output_layer.weight",
+        dtype=param.dtype,
+        shape=param.shape,
+        attrs={},
+        size=param.numel() * param.element_size(),
+        src_rank=0,
+    )
+    monkeypatch.setattr(
+        common,
+        "get_parallel_state",
+        lambda: SimpleNamespace(tp=SimpleNamespace(size=2, group="tp"), etp=SimpleNamespace(size=1)),
+    )
+
+    waited = []
+
+    def fake_all_gather_into_tensor(output, value, *, group, async_op):
+        assert group == "tp"
+        assert async_op is True
+        output[: value.shape[0]].copy_(value)
+        output[value.shape[0] :].copy_(value + 10)
+        return SimpleNamespace(wait=lambda: waited.append(True))
+
+    monkeypatch.setattr(common.dist, "all_gather_into_tensor", fake_all_gather_into_tensor)
+    monkeypatch.setattr(
+        common.dist,
+        "all_gather",
+        lambda *args, **kwargs: pytest.fail("dim-0 gather must not allocate partition tensors"),
+    )
+
+    [gathered] = common.all_gather_params_async(Namespace(swiglu=False), [(info, param)])
+
+    assert waited == [True]
+    torch.testing.assert_close(gathered, torch.cat([param, param + 10], dim=0))
+
+
 def _tensor(size: int) -> torch.Tensor:
     return torch.empty(size, dtype=torch.uint8)
 
