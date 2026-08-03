@@ -143,12 +143,6 @@ def _gather_with_stride(
     return torch.cat(interleaved, dim=partition_dim)
 
 
-def _empty_dim0_gather_output(param: torch.Tensor, tp_size: int) -> torch.Tensor:
-    shape = list(param.shape)
-    shape[0] *= tp_size
-    return torch.empty(shape, dtype=param.dtype, device=param.device)
-
-
 def _is_unmarked_grouped_expert_weight(name: str, param: torch.nn.Parameter) -> bool:
     """TEGroupedLinear never marks its per-expert weight0..weightN, so Megatron fills in
     the defaults (tensor_model_parallel=False, partition_dim=-1) and the tensor claims to
@@ -207,17 +201,12 @@ def all_gather_param(args: Namespace, name: str, param: torch.nn.Parameter) -> t
     if tp_size <= 1:
         return param.data
 
-    partition_dim = param.partition_dim
-    partition_stride = param.partition_stride
-    partition_stride, partition_dim = _check_and_fix_partition(args, name, partition_stride, partition_dim)
-
-    if partition_stride == 1 and partition_dim == 0:
-        gathered_param = _empty_dim0_gather_output(param, tp_size)
-        dist.all_gather_into_tensor(gathered_param, param.data.contiguous(), group=tp_group)
-        return gathered_param
-
     param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
     dist.all_gather(param_partitions, param.data, group=tp_group)
+    partition_dim = param.partition_dim
+    partition_stride = param.partition_stride
+
+    partition_stride, partition_dim = _check_and_fix_partition(args, name, partition_stride, partition_dim)
     param = _gather_with_stride(param_partitions, partition_dim, partition_stride)
     return param
 
@@ -227,9 +216,9 @@ def all_gather_params_async(
     param_infos_and_params: list[tuple[ParamInfo, torch.Tensor]],
 ) -> list[torch.Tensor]:
     """
-    Parallel TP all-gather for multiple params. Dim-0 tensors gather directly into their final
-    storage; other layouts gather partitions for later reordering. Loop 2 waits all NCCL handles,
-    then loop 3 applies any required GLU rechunk or MoE dimension fix.
+    Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
+    dist.all_gather(async_op=True) on expert-TP/regular-TP group (skip expert_bias/non-TP/duplicated).
+    Loop 2: wait all NCCL handles (enables overlap). Loop 3: concat partitions + apply GLU rechunk/MoE dim fix.
     """
     # Phase 1: Start all async all_gather operations
     gather_tasks = []
@@ -238,12 +227,12 @@ def all_gather_params_async(
     for info, param in param_infos_and_params:
         # Prepare async all_gather
         if "expert_bias" in info.name:
-            gather_tasks.append((info, param, None, None, None, None, None))
+            gather_tasks.append((info, param, None, None, None, None))
             handles.append(None)
         elif getattr(param, "parallel_mode", None) == "duplicated" or (
             not param.tensor_model_parallel and not _is_unmarked_grouped_expert_weight(info.name, param)
         ):
-            gather_tasks.append((info, param.data, None, None, None, None, None))
+            gather_tasks.append((info, param.data, None, None, None, None))
             handles.append(None)
         else:
             # Start async all_gather
@@ -255,26 +244,13 @@ def all_gather_params_async(
                 tp_group = get_parallel_state().tp.group
 
             if tp_size <= 1:
-                gather_tasks.append((info, param.data, None, None, None, None, None))
+                gather_tasks.append((info, param.data, None, None, None, None))
                 handles.append(None)
                 continue
 
-            partition_stride, partition_dim = _check_and_fix_partition(
-                args, info.name, param.partition_stride, param.partition_dim
-            )
-            if partition_stride == 1 and partition_dim == 0:
-                gather_input = param.data.contiguous()
-                gathered_param = _empty_dim0_gather_output(param, tp_size)
-                handle = dist.all_gather_into_tensor(
-                    gathered_param, gather_input, group=tp_group, async_op=True
-                )
-                gather_tasks.append((info, None, handle, gathered_param, None, None, gather_input))
-            else:
-                param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
-                handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
-                gather_tasks.append(
-                    (info, None, handle, param_partitions, partition_dim, partition_stride, param.data)
-                )
+            param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
+            handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
+            gather_tasks.append((info, None, handle, param_partitions, param.partition_dim, param.partition_stride))
             handles.append(handle)
 
     # Phase 2: Wait for ALL async operations to complete at once
@@ -285,14 +261,15 @@ def all_gather_params_async(
 
     # Phase 3: Process all results after all communications are done
     gathered_params = []
-    for info, direct_param, handle, gather_output, partition_dim, partition_stride, _gather_input in gather_tasks:
+    for info, direct_param, handle, param_partitions, partition_dim, partition_stride in gather_tasks:
         if handle is None:
             # No all_gather needed
             param = direct_param
-        elif isinstance(gather_output, torch.Tensor):
-            param = gather_output
         else:
-            param = _gather_with_stride(gather_output, partition_dim, partition_stride)
+            partition_stride, partition_dim = _check_and_fix_partition(
+                args, info.name, partition_stride, partition_dim
+            )
+            param = _gather_with_stride(param_partitions, partition_dim, partition_stride)
 
         gathered_params.append(param)
 
