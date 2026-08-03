@@ -65,8 +65,13 @@ class RolloutDataSource(DataSource):
             # TODO move (during the refactor)
             if (d := args.dump_details) is not None:
                 tokenizer.save_pretrained(Path(d) / "tokenizer")
-                if processor:
+                if processor and hasattr(processor, "save_pretrained"):
                     processor.save_pretrained(Path(d) / "processor")
+                elif processor:
+                    logger.warning(
+                        "processor %s has no save_pretrained(); skipping processor snapshot",
+                        type(processor).__name__,
+                    )
 
             self.dataset = Dataset(
                 args.prompt_data,
