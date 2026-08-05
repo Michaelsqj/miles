@@ -6,6 +6,8 @@ from collections.abc import Callable
 from functools import cache
 
 import megatron.core.parallel_state as ps
+import functools
+
 import torch
 import torch.nn.functional as F
 import triton
@@ -516,6 +518,19 @@ def get_inkling_relative_attention_score_mod(rel_extent: int) -> Callable:
     return score_mod_rel_bias
 
 
+# Pinned from the 20260804-165819Z max-autotune sweep (H200, head_dim=128).
+# The default inductor heuristic for the flex backward kernel needs 233472B
+# of shared memory, ~1KB over the sm90 limit, and hard-fails without
+# max-autotune candidates to fall back on.
+_FLEX_KERNEL_OPTIONS = {
+    "bwd_BLOCK_M1": 32,
+    "bwd_BLOCK_N1": 64,
+    "bwd_BLOCK_M2": 64,
+    "bwd_BLOCK_N2": 32,
+    "bwd_num_stages": 3,
+    "bwd_num_warps": 4,
+}
+
 _FLEX_COMPILED = None
 
 
@@ -525,7 +540,8 @@ def flex_compiled():
         assert flex_attention is not None, "flex_attention needs torch>=2.5 + inductor"
         torch._dynamo.config.cache_size_limit = 1024
         torch._dynamo.config.accumulated_cache_size_limit = 1024
-        _FLEX_COMPILED = torch.compile(flex_attention, dynamic=True, mode="max-autotune-no-cudagraphs")
+        _compiled = torch.compile(flex_attention, dynamic=True)
+        _FLEX_COMPILED = functools.partial(_compiled, kernel_options=_FLEX_KERNEL_OPTIONS)
     return _FLEX_COMPILED
 
 
