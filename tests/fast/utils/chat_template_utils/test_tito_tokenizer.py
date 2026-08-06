@@ -57,6 +57,7 @@ from miles.utils.chat_template_utils import (
     apply_chat_template_from_str,
     resolve_fixed_chat_template,
 )
+from miles.utils.chat_template_utils.inkling import render_messages as render_inkling_messages
 from miles.utils.chat_template_utils.tito_tokenizer import (
     ALL_APPEND_ROLES,
     DeepSeekV4TITOTokenizer,
@@ -383,6 +384,77 @@ class TestInklingFixedTemplate:
             "<|message_model|><|content_text|>done<|end_message|>"
             "<|content_model_end_sampling|>"
         ) in rendered
+
+
+class TestInklingPythonRenderer:
+    def test_terminus_xml_is_plain_assistant_content(self):
+        rendered = render_inkling_messages(
+            [
+                {"role": "user", "content": "inspect the terminal"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "<response><analysis>ready</analysis><plan>list</plan>"
+                        "<commands></commands></response>"
+                    ),
+                },
+                {"role": "user", "content": "terminal output"},
+            ],
+            add_generation_prompt=False,
+        )
+
+        assert rendered == (
+            "<|message_user|><|content_text|>inspect the terminal<|end_message|>"
+            "<|message_model|><|content_text|>"
+            "<response><analysis>ready</analysis><plan>list</plan>"
+            "<commands></commands></response><|end_message|>"
+            "<|content_model_end_sampling|>"
+            "<|message_user|><|content_text|>terminal output<|end_message|>"
+        )
+
+    def test_nonempty_assistant_turn_ends_sampling(self):
+        rendered = render_inkling_messages(
+            [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": "done",
+                    "reasoning_content": "think",
+                },
+            ],
+            add_generation_prompt=False,
+        )
+
+        assert rendered == (
+            "<|message_user|><|content_text|>hello<|end_message|>"
+            "<|message_model|><|content_thinking|>think<|end_message|>"
+            "<|message_model|><|content_text|>done<|end_message|>"
+            "<|content_model_end_sampling|>"
+        )
+
+    def test_empty_assistant_turn_has_no_block_or_sampling_end(self):
+        rendered = render_inkling_messages(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": ""},
+            ],
+            add_generation_prompt=False,
+        )
+
+        assert rendered == "<|message_user|><|content_text|>hello<|end_message|>"
+
+    def test_reasoning_only_assistant_turn_ends_sampling(self):
+        rendered = render_inkling_messages(
+            [
+                {"role": "assistant", "content": "", "reasoning_content": "think"},
+            ],
+            add_generation_prompt=False,
+        )
+
+        assert rendered == (
+            "<|message_model|><|content_thinking|>think<|end_message|>"
+            "<|content_model_end_sampling|>"
+        )
 
 
 class TestDeepSeekV32IncrementalAppend:

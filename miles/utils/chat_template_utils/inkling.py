@@ -18,6 +18,7 @@ _CONTENT_TEXT = "<|content_text|>"
 _CONTENT_THINKING = "<|content_thinking|>"
 _CONTENT_XML = "<|content_xml|>"
 _END_MESSAGE = "<|end_message|>"
+_CONTENT_MODEL_END_SAMPLING = "<|content_model_end_sampling|>"
 
 
 @functools.cache
@@ -93,7 +94,11 @@ def render_messages(
             if not isinstance(rc, str):
                 raise TypeError("assistant reasoning_content must be a string for Inkling rendering")
             parts.append(f"{_MESSAGE[role]}{_CONTENT_THINKING}{rc}{_END_MESSAGE}")
-        parts.append(f"{_MESSAGE[role]}{_CONTENT_TEXT}{_text_content(msg.get('content', ''))}{_END_MESSAGE}")
+        content = _text_content(msg.get("content", ""))
+        if role != "assistant" or content:
+            parts.append(f"{_MESSAGE[role]}{_CONTENT_TEXT}{content}{_END_MESSAGE}")
+        if role == "assistant" and (msg.get("reasoning_content") or content):
+            parts.append(_CONTENT_MODEL_END_SAMPLING)
 
     if add_generation_prompt:
         parts.append(_MESSAGE_MODEL)
