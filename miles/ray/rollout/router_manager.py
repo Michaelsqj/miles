@@ -13,6 +13,7 @@ from miles.utils.http_utils import run_router as run_sglang_router
 from miles.utils.http_utils import wait_for_server_ready
 
 logger = logging.getLogger(__name__)
+SESSION_SERVER_STARTUP_TIMEOUT = 180
 
 
 def start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool = False) -> tuple[str, int]:
@@ -146,5 +147,10 @@ def start_session_server(args):
     # replacing the per-session /health probe.
     args.session_server_instance_ids = instance_ids
     for port, process in processes:
-        wait_for_server_ready(ip, port, process, timeout=30)
+        wait_for_server_ready(
+            ip,
+            port,
+            process,
+            timeout=SESSION_SERVER_STARTUP_TIMEOUT,
+        )
     logger.info(f"Session servers launched at {ip}, ports {ports} ({len(ports)} instances)")

@@ -5,7 +5,12 @@ from unittest.mock import patch
 import pytest
 from tests.fast.ray.rollout.conftest import make_args
 
-from miles.ray.rollout.router_manager import _resolve_session_server_ports, start_router, start_session_server
+from miles.ray.rollout.router_manager import (
+    SESSION_SERVER_STARTUP_TIMEOUT,
+    _resolve_session_server_ports,
+    start_router,
+    start_session_server,
+)
 
 
 class TestStartRouter:
@@ -40,6 +45,9 @@ class TestStartRouter:
 
 
 class TestStartSessionServer:
+    def test_pool_cold_start_timeout_allows_concurrent_imports(self):
+        assert SESSION_SERVER_STARTUP_TIMEOUT == 180
+
     def test_disabled_returns_silently(self):
         """Happy no-op: ``use_session_server=False`` → return without raising,
         without touching any other config."""
