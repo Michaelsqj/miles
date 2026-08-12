@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from miles.utils.chat_template_utils import deepseek, template
-from miles.utils.chat_template_utils.inkling_response import InklingResponseParser
+from miles.utils.chat_template_utils.inkling_parser import InklingResponseParser
 from miles.utils.chat_template_utils.message_matcher_hub import (
     assert_messages_append_only_with_allowed_role,
     strict_message_matches,
