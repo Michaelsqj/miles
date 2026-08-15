@@ -197,13 +197,14 @@ def test_debug_module_backward_hook_matches_live_module_and_observes_gradient(mo
     model.target = torch.nn.Linear(3, 2, bias=False)
     monkeypatch.setenv("MILES_DEBUG_MODULE_BACKWARD_SUFFIXES", "target")
 
-    with patch.object(model_module, "_log_debug_module_gradient") as log_gradient:
+    with patch.object(model_module, "_log_debug_module_tensor") as log_tensor:
         model_module._install_debug_module_backward_hooks([model])
         model.target(torch.ones(1, 3, requires_grad=True)).sum().backward()
 
-    log_gradient.assert_called_once()
-    assert log_gradient.call_args.kwargs["module_name"] == "chunk=0 target"
-    assert log_gradient.call_args.kwargs["tensor_path"] == "output"
+    log_tensor.assert_called_once()
+    assert log_tensor.call_args.kwargs["module_name"] == "chunk=0 target"
+    assert log_tensor.call_args.kwargs["tensor_path"] == "output"
+    assert log_tensor.call_args.kwargs["kind"] == "output_grad"
 
 
 def test_debug_module_backward_hook_rejects_inert_suffix(monkeypatch):
@@ -212,3 +213,27 @@ def test_debug_module_backward_hook_rejects_inert_suffix(monkeypatch):
     monkeypatch.setenv("MILES_DEBUG_MODULE_BACKWARD_SUFFIXES", "missing")
     with pytest.raises(RuntimeError, match="matched no live modules"):
         model_module._install_debug_module_backward_hooks([torch.nn.Linear(2, 2)])
+
+
+def test_debug_module_tensor_hook_observes_forward_and_parameter_grad(monkeypatch):
+    from miles.backends.megatron_utils import model as model_module
+
+    model = torch.nn.Module()
+    model.adapter = torch.nn.Linear(3, 2, bias=False)
+    monkeypatch.setenv("MILES_DEBUG_MODULE_TENSOR_SUFFIXES", "adapter")
+
+    with patch.object(model_module, "_log_debug_module_tensor") as log_tensor:
+        model_module._install_debug_module_tensor_hooks([model])
+        model.adapter(torch.ones(1, 3, requires_grad=True)).sum().backward()
+
+    kinds = [call.kwargs["kind"] for call in log_tensor.call_args_list]
+    assert kinds == ["forward_input", "forward_output", "parameter_grad"]
+    assert {call.kwargs["module_name"] for call in log_tensor.call_args_list} == {"chunk=0 adapter"}
+
+
+def test_debug_module_tensor_hook_rejects_inert_suffix(monkeypatch):
+    from miles.backends.megatron_utils import model as model_module
+
+    monkeypatch.setenv("MILES_DEBUG_MODULE_TENSOR_SUFFIXES", "missing")
+    with pytest.raises(RuntimeError, match="matched no live modules"):
+        model_module._install_debug_module_tensor_hooks([torch.nn.Linear(2, 2)])

@@ -122,11 +122,10 @@ def _iter_output_tensors(value, path: str = "output"):
             yield from _iter_output_tensors(item, f"{path}[{key!r}]")
 
 
-def _log_debug_module_gradient(*, module_name: str, tensor_path: str, call: int, grad: torch.Tensor) -> None:
-    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+def _debug_tensor_stats(tensor: torch.Tensor) -> tuple[int, int, int, int, float]:
     bad = nan = posinf = neginf = 0
     finite_abs_max = 0.0
-    flat = grad.detach().reshape(-1)
+    flat = tensor.detach().reshape(-1)
     for chunk in flat.split(4 * 1024 * 1024):
         finite = torch.isfinite(chunk)
         bad += int((~finite).sum())
@@ -135,19 +134,28 @@ def _log_debug_module_gradient(*, module_name: str, tensor_path: str, call: int,
         neginf += int(torch.isneginf(chunk).sum())
         if bool(finite.any()):
             finite_abs_max = max(finite_abs_max, float(chunk[finite].abs().max()))
+    return bad, nan, posinf, neginf, finite_abs_max
+
+
+def _log_debug_module_tensor(
+    *, module_name: str, tensor_path: str, call: int, kind: str, tensor: torch.Tensor
+) -> None:
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    bad, nan, posinf, neginf, finite_abs_max = _debug_tensor_stats(tensor)
     logger.error(
-        "MODULE_OUTPUT_GRAD rank=%d module=%s call=%d tensor=%s bad=%d nan=%d posinf=%d neginf=%d numel=%d finite_abs_max=%g dtype=%s",
+        "MODULE_TENSOR rank=%d module=%s call=%d kind=%s tensor=%s bad=%d nan=%d posinf=%d neginf=%d numel=%d finite_abs_max=%g dtype=%s",
         rank,
         module_name,
         call,
+        kind,
         tensor_path,
         bad,
         nan,
         posinf,
         neginf,
-        grad.numel(),
+        tensor.numel(),
         finite_abs_max,
-        grad.dtype,
+        tensor.dtype,
     )
 
 
@@ -180,11 +188,12 @@ def _install_debug_module_backward_hooks(model: Sequence[torch.nn.Module]) -> No
                             path=tensor_path,
                             call=state["value"],
                         ):
-                            _log_debug_module_gradient(
+                            _log_debug_module_tensor(
                                 module_name=module_name,
                                 tensor_path=path,
                                 call=call,
-                                grad=grad,
+                                kind="output_grad",
+                                tensor=grad,
                             )
                             return grad
 
@@ -198,6 +207,81 @@ def _install_debug_module_backward_hooks(model: Sequence[torch.nn.Module]) -> No
             f"requested={suffixes!r}"
         )
     logger.warning("Installed module output-gradient hooks on %s", matched)
+
+
+def _install_debug_module_tensor_hooks(model: Sequence[torch.nn.Module]) -> None:
+    """Trace live adapter inputs, outputs, and parameter grads during exact replays."""
+    raw_suffixes = os.environ.get("MILES_DEBUG_MODULE_TENSOR_SUFFIXES", "")
+    if not raw_suffixes:
+        return
+    suffixes = tuple(item.strip() for item in raw_suffixes.split(",") if item.strip())
+    if not suffixes:
+        raise ValueError("MILES_DEBUG_MODULE_TENSOR_SUFFIXES did not contain a module suffix")
+
+    matched: list[str] = []
+    for chunk_id, model_chunk in enumerate(model):
+        for module_name, module in model_chunk.named_modules():
+            if not any(module_name.endswith(suffix) for suffix in suffixes):
+                continue
+            qualified_name = f"chunk={chunk_id} {module_name}"
+            matched.append(qualified_name)
+            calls = {"value": 0}
+
+            def _forward_pre_hook(_module, inputs, *, name=qualified_name, state=calls):
+                if not torch.is_grad_enabled():
+                    return
+                state["value"] += 1
+                for tensor_path, tensor in _iter_output_tensors(inputs, "input"):
+                    _log_debug_module_tensor(
+                        module_name=name,
+                        tensor_path=tensor_path,
+                        call=state["value"],
+                        kind="forward_input",
+                        tensor=tensor,
+                    )
+
+            def _forward_hook(_module, _inputs, output, *, name=qualified_name, state=calls):
+                if not torch.is_grad_enabled():
+                    return
+                for tensor_path, tensor in _iter_output_tensors(output):
+                    _log_debug_module_tensor(
+                        module_name=name,
+                        tensor_path=tensor_path,
+                        call=state["value"],
+                        kind="forward_output",
+                        tensor=tensor,
+                    )
+
+            module.register_forward_pre_hook(_forward_pre_hook)
+            module.register_forward_hook(_forward_hook)
+            for parameter_name, parameter in module.named_parameters(recurse=True):
+                if not parameter.requires_grad:
+                    continue
+
+                def _parameter_hook(
+                    grad,
+                    *,
+                    name=qualified_name,
+                    path=parameter_name,
+                    state=calls,
+                ):
+                    _log_debug_module_tensor(
+                        module_name=name,
+                        tensor_path=path,
+                        call=state["value"],
+                        kind="parameter_grad",
+                        tensor=grad,
+                    )
+                    return grad
+
+                parameter.register_hook(_parameter_hook)
+
+    if not matched:
+        raise RuntimeError(
+            "MILES_DEBUG_MODULE_TENSOR_SUFFIXES matched no live modules; "
+            f"requested={suffixes!r}"
+        )
+    logger.warning("Installed module tensor hooks on %s", matched)
 
 
 def _has_loadable_ckpt(load_dir: str | None) -> bool:
@@ -305,6 +389,7 @@ def setup_model_and_optimizer(
         model = get_model(provider_func, ModelType.encoder_or_decoder)
 
     _install_debug_module_backward_hooks(model)
+    _install_debug_module_tensor_hooks(model)
 
     if args.debug_disable_optimizer:
         if is_first_replica_megatron_main_rank():
