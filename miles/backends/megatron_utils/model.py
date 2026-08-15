@@ -4,6 +4,7 @@ import dataclasses
 import gc
 import logging
 import math
+import os
 from argparse import Namespace
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
@@ -55,6 +56,59 @@ from .model_provider import get_model_provider_func
 from .parallel import get_packed_seq_params
 
 logger = logging.getLogger(__name__)
+
+
+def _log_nonfinite_parameter_grads(model: Sequence[torch.nn.Module], *, phase: str) -> None:
+    """Log the first bad gradient source during an explicitly enabled debug replay."""
+    if os.environ.get("MILES_DEBUG_NONFINITE_GRADS") != "1":
+        return
+
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    bad_tensors = 0
+    bad_values = 0
+    largest: list[tuple[float, str]] = []
+    for chunk_id, model_chunk in enumerate(model):
+        for name, param in model_chunk.named_parameters():
+            grad = getattr(param, "main_grad", None)
+            if grad is None:
+                grad = param.grad
+            if grad is None:
+                continue
+            finite = torch.isfinite(grad)
+            bad = int((~finite).sum().item())
+            finite_abs_max = float(
+                torch.where(
+                    finite,
+                    grad.detach().abs(),
+                    torch.zeros((), device=grad.device, dtype=grad.dtype),
+                )
+                .max()
+                .item()
+            )
+            largest.append((finite_abs_max, f"chunk={chunk_id} {name}"))
+            if bad:
+                bad_tensors += 1
+                bad_values += bad
+                logger.error(
+                    "NONFINITE_GRAD rank=%d phase=%s chunk=%d name=%s bad=%d numel=%d finite_abs_max=%g dtype=%s",
+                    rank,
+                    phase,
+                    chunk_id,
+                    name,
+                    bad,
+                    grad.numel(),
+                    finite_abs_max,
+                    grad.dtype,
+                )
+
+    logger.error(
+        "NONFINITE_GRAD_SUMMARY rank=%d phase=%s bad_tensors=%d bad_values=%d largest_finite=%s",
+        rank,
+        phase,
+        bad_tensors,
+        bad_values,
+        largest and max(largest),
+    )
 
 
 def _has_loadable_ckpt(load_dir: str | None) -> bool:
@@ -589,7 +643,9 @@ def train_one_step(
             valid_step = False
 
     if (not disable_optimizer) and (not multi_lora) and (not getattr(args, "check_for_nan_in_loss_and_grad", True)):
+        _log_nonfinite_parameter_grads(model, phase="before_prepare_grads")
         found_inf_flag = optimizer.prepare_grads()
+        _log_nonfinite_parameter_grads(model, phase="after_prepare_grads")
         if found_inf_flag:
             valid_step = False
         else:
