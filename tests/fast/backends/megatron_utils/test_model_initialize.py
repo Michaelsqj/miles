@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 import pytest
+import torch
 
 
 def _stub_module(name: str, attrs: dict[str, object] | None = None, is_package: bool = False) -> types.ModuleType:
@@ -187,3 +188,27 @@ def test_initialize_steps_scheduler_when_checkpoint_did_not_restore_it():
 
     assert result == (model, optimizer, opt_param_scheduler, 100)
     opt_param_scheduler.step.assert_called_once_with(increment=800)
+
+
+def test_debug_module_backward_hook_matches_live_module_and_observes_gradient(monkeypatch):
+    from miles.backends.megatron_utils import model as model_module
+
+    model = torch.nn.Module()
+    model.target = torch.nn.Linear(3, 2, bias=False)
+    monkeypatch.setenv("MILES_DEBUG_MODULE_BACKWARD_SUFFIXES", "target")
+
+    with patch.object(model_module, "_log_debug_module_gradient") as log_gradient:
+        model_module._install_debug_module_backward_hooks([model])
+        model.target(torch.ones(1, 3, requires_grad=True)).sum().backward()
+
+    log_gradient.assert_called_once()
+    assert log_gradient.call_args.kwargs["module_name"] == "chunk=0 target"
+    assert log_gradient.call_args.kwargs["tensor_path"] == "output"
+
+
+def test_debug_module_backward_hook_rejects_inert_suffix(monkeypatch):
+    from miles.backends.megatron_utils import model as model_module
+
+    monkeypatch.setenv("MILES_DEBUG_MODULE_BACKWARD_SUFFIXES", "missing")
+    with pytest.raises(RuntimeError, match="matched no live modules"):
+        model_module._install_debug_module_backward_hooks([torch.nn.Linear(2, 2)])

@@ -1,7 +1,5 @@
 import copy
-import logging
 import math
-import os
 from dataclasses import dataclass
 from typing import NoReturn
 
@@ -32,37 +30,6 @@ from miles.utils.replay_base import indexer_replay_manager
 
 from .ops.indexer import generate_varlen_mask_params, lighting_indexer
 from .ops.sparse_mla import SparseMLA
-
-
-logger = logging.getLogger(__name__)
-
-
-def _debug_attention_gradient(tensor: torch.Tensor, *, layer_number: int, name: str) -> None:
-    """Log the local GLM-5 attention backward boundary selected for a debug replay."""
-    if os.environ.get("MILES_DEBUG_GLM5_ATTENTION_BACKWARD") != "1" or not tensor.requires_grad:
-        return
-    selected_layer = int(os.environ.get("MILES_DEBUG_GLM5_ATTENTION_LAYER", "78"))
-    if layer_number != selected_layer:
-        return
-
-    def _log(grad: torch.Tensor) -> torch.Tensor:
-        finite = torch.isfinite(grad)
-        finite_values = grad[finite]
-        logger.error(
-            "GLM5_ATTN_GRAD layer=%d tensor=%s bad=%d nan=%d posinf=%d neginf=%d numel=%d finite_abs_max=%g dtype=%s",
-            layer_number,
-            name,
-            int((~finite).sum()),
-            int(torch.isnan(grad).sum()),
-            int(torch.isposinf(grad).sum()),
-            int(torch.isneginf(grad).sum()),
-            grad.numel(),
-            float(finite_values.abs().max()) if finite_values.numel() else 0.0,
-            grad.dtype,
-        )
-        return grad
-
-    tensor.register_hook(_log)
 
 # Names of the indexer submodules. On a DSA model with *cross-layer index
 # sharing* these only exist on "computing" layers; "skip" layers drop them.
@@ -263,9 +230,6 @@ class DSAMultiLatentAttention(Attention):
             packed_seq_params,
             inference_context=inference_context,
         )
-        _debug_attention_gradient(q, layer_number=self.layer_number, name="q")
-        _debug_attention_gradient(kv, layer_number=self.layer_number, name="kv")
-        _debug_attention_gradient(wv, layer_number=self.layer_number, name="wv")
 
         def fused_select_topk(index_q, index_k, w, starts, ends, block_size=8192):
             seq_len = index_q.shape[0]
@@ -341,12 +305,9 @@ class DSAMultiLatentAttention(Attention):
             _, topk_indices = fused_select_topk(index_query, index_key, head_weights, starts, ends)
 
         core_attn_out, _ = SparseMLA.apply(q, kv, topk_indices, self.softmax_scale)
-        _debug_attention_gradient(core_attn_out, layer_number=self.layer_number, name="sparse_mla_output")
         core_attn_out = torch.einsum("thm,hdm->thd", core_attn_out, wv)
-        _debug_attention_gradient(core_attn_out, layer_number=self.layer_number, name="value_projection_output")
 
         core_attn_out = core_attn_out.reshape(core_attn_out.size(0), 1, -1)
-        _debug_attention_gradient(core_attn_out, layer_number=self.layer_number, name="linear_proj_input")
 
         if self.recompute_up_proj:
             assert self.qkv_up_checkpoint is not None
@@ -357,7 +318,6 @@ class DSAMultiLatentAttention(Attention):
         # Output. [sq, b, h]
         # =================
         output, bias = self.linear_proj(core_attn_out)
-        _debug_attention_gradient(output, layer_number=self.layer_number, name="linear_proj_output")
         return output, bias
 
 

@@ -111,6 +111,95 @@ def _log_nonfinite_parameter_grads(model: Sequence[torch.nn.Module], *, phase: s
     )
 
 
+def _iter_output_tensors(value, path: str = "output"):
+    if isinstance(value, torch.Tensor):
+        yield path, value
+    elif isinstance(value, (tuple, list)):
+        for index, item in enumerate(value):
+            yield from _iter_output_tensors(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _iter_output_tensors(item, f"{path}[{key!r}]")
+
+
+def _log_debug_module_gradient(*, module_name: str, tensor_path: str, call: int, grad: torch.Tensor) -> None:
+    rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    bad = nan = posinf = neginf = 0
+    finite_abs_max = 0.0
+    flat = grad.detach().reshape(-1)
+    for chunk in flat.split(4 * 1024 * 1024):
+        finite = torch.isfinite(chunk)
+        bad += int((~finite).sum())
+        nan += int(torch.isnan(chunk).sum())
+        posinf += int(torch.isposinf(chunk).sum())
+        neginf += int(torch.isneginf(chunk).sum())
+        if bool(finite.any()):
+            finite_abs_max = max(finite_abs_max, float(chunk[finite].abs().max()))
+    logger.error(
+        "MODULE_OUTPUT_GRAD rank=%d module=%s call=%d tensor=%s bad=%d nan=%d posinf=%d neginf=%d numel=%d finite_abs_max=%g dtype=%s",
+        rank,
+        module_name,
+        call,
+        tensor_path,
+        bad,
+        nan,
+        posinf,
+        neginf,
+        grad.numel(),
+        finite_abs_max,
+        grad.dtype,
+    )
+
+
+def _install_debug_module_backward_hooks(model: Sequence[torch.nn.Module]) -> None:
+    """Install exact, output-gradient hooks on named live modules for a saved-batch replay."""
+    raw_suffixes = os.environ.get("MILES_DEBUG_MODULE_BACKWARD_SUFFIXES", "")
+    if not raw_suffixes:
+        return
+    suffixes = tuple(item.strip() for item in raw_suffixes.split(",") if item.strip())
+    if not suffixes:
+        raise ValueError("MILES_DEBUG_MODULE_BACKWARD_SUFFIXES did not contain a module suffix")
+
+    matched: list[str] = []
+    for chunk_id, model_chunk in enumerate(model):
+        for module_name, module in model_chunk.named_modules():
+            if not any(module_name.endswith(suffix) for suffix in suffixes):
+                continue
+            qualified_name = f"chunk={chunk_id} {module_name}"
+            matched.append(qualified_name)
+            calls = {"value": 0}
+
+            def _forward_hook(_module, _inputs, output, *, name=qualified_name, state=calls):
+                state["value"] += 1
+                for tensor_path, tensor in _iter_output_tensors(output):
+                    if tensor.requires_grad:
+                        def _tensor_hook(
+                            grad,
+                            *,
+                            module_name=name,
+                            path=tensor_path,
+                            call=state["value"],
+                        ):
+                            _log_debug_module_gradient(
+                                module_name=module_name,
+                                tensor_path=path,
+                                call=call,
+                                grad=grad,
+                            )
+                            return grad
+
+                        tensor.register_hook(_tensor_hook)
+
+            module.register_forward_hook(_forward_hook)
+
+    if not matched:
+        raise RuntimeError(
+            "MILES_DEBUG_MODULE_BACKWARD_SUFFIXES matched no live modules; "
+            f"requested={suffixes!r}"
+        )
+    logger.warning("Installed module output-gradient hooks on %s", matched)
+
+
 def _has_loadable_ckpt(load_dir: str | None) -> bool:
     """Whether ``--load`` holds anything; ``load_checkpoint`` dispatches dist vs HF itself."""
     return bool(load_dir) and Path(load_dir).is_dir() and any(Path(load_dir).iterdir())
@@ -214,6 +303,8 @@ def setup_model_and_optimizer(
 
             provider_func = wrap_model_provider_with_inkling_lora(provider_func, args)
         model = get_model(provider_func, ModelType.encoder_or_decoder)
+
+    _install_debug_module_backward_hooks(model)
 
     if args.debug_disable_optimizer:
         if is_first_replica_megatron_main_rank():
