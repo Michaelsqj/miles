@@ -17,6 +17,7 @@ from miles.backends.training_utils.loss_hub.math_utils import (
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
+    maybe_log_backward_stats,
 )
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.misc import load_function
@@ -171,6 +172,7 @@ def policy_loss_function(
         torch.nan_to_num(ppo_kl, nan=0.0, posinf=0.0, neginf=0.0),
         ppo_kl.new_zeros(()),
     )
+    maybe_log_backward_stats("sanitized_ppo_kl", ppo_kl)
     advantages = torch.where(
         active_tokens,
         torch.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0),
@@ -180,6 +182,7 @@ def policy_loss_function(
     pg_loss, pg_clipfrac = compute_policy_loss(
         ppo_kl, advantages, args.eps_clip, args.eps_clip_high, getattr(args, "eps_clip_c", None)
     )
+    maybe_log_backward_stats("unreduced_pg_loss", pg_loss)
 
     if getattr(args, "dump_details", None) is not None:
         from miles.backends.training_utils.debug_dump import maybe_dump_policy_loss_debug
@@ -269,6 +272,7 @@ def policy_loss_function(
     )
 
     pg_loss = pg_loss_reducer(pg_loss)
+    maybe_log_backward_stats("reduced_pg_loss", pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(ppo_kl)
 

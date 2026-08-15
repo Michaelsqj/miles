@@ -4,7 +4,10 @@ from collections.abc import Iterator
 import torch
 
 from miles.backends.training_utils.cp_utils import allgather_cp_redistribute, get_logits_and_tokens_offset_with_cp
-from miles.backends.training_utils.loss_hub.math_utils import calculate_log_probs_and_entropy
+from miles.backends.training_utils.loss_hub.math_utils import (
+    calculate_log_probs_and_entropy,
+    maybe_log_backward_stats,
+)
 from miles.backends.training_utils.parallel import get_parallel_state
 
 
@@ -175,6 +178,7 @@ def get_log_probs_and_entropy(
         response_lengths=response_lengths,
         max_seq_lens=max_seq_lens,
     ):
+        maybe_log_backward_stats("response_logits", logits_chunk)
         log_prob, entropy = calculate_log_probs_and_entropy(
             logits_chunk,
             tokens_chunk,
@@ -185,6 +189,7 @@ def get_log_probs_and_entropy(
             true_on_policy=args.true_on_policy_mode,
             vocab_size=getattr(args, "vocab_size", None),
         )
+        maybe_log_backward_stats("selected_log_prob", log_prob)
 
         log_probs_list.append(log_prob.squeeze(-1))
         if with_entropy:

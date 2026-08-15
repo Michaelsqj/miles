@@ -86,6 +86,39 @@ def compute_ess_ratio_contribution(
 
 
 _TOP_LOGPROB_BWD_DUMP_COUNTER = 0
+_BACKWARD_STATS_COUNTER = 0
+
+
+def maybe_log_backward_stats(name: str, tensor: torch.Tensor) -> None:
+    """Log gradient statistics without retaining or copying the gradient tensor."""
+    import os
+
+    if os.environ.get("MILES_LOG_BACKWARD_STATS") != "1" or not tensor.requires_grad:
+        return
+
+    def hook(grad: torch.Tensor) -> torch.Tensor:
+        global _BACKWARD_STATS_COUNTER
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        finite = torch.isfinite(grad)
+        finite_values = grad[finite]
+        stats = {
+            "rank": rank,
+            "counter": _BACKWARD_STATS_COUNTER,
+            "name": name,
+            "shape": tuple(grad.shape),
+            "dtype": str(grad.dtype),
+            "finite": int(finite.sum().item()),
+            "nan": int(torch.isnan(grad).sum().item()),
+            "inf": int(torch.isinf(grad).sum().item()),
+            "max_abs_finite": (
+                float(finite_values.float().abs().max().item()) if finite_values.numel() else None
+            ),
+        }
+        _BACKWARD_STATS_COUNTER += 1
+        print(f"[MILES_BACKWARD_STATS] {stats}", flush=True)
+        return grad
+
+    tensor.register_hook(hook)
 
 
 def _maybe_dump_top_logprob_backward(name: str, tensor: torch.Tensor) -> None:
