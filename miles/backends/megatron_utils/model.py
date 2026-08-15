@@ -723,8 +723,12 @@ def finalize_model_grads_with_empty_cache(*args, **kwargs):
         clear_memory()
     from .lora_utils import reduce_marked_lora_grads
 
+    _log_nonfinite_parameter_grads(args[0], phase="before_lora_grad_reduction")
     reduce_marked_lora_grads(args[0])
-    return finalize_model_grads(*args, **kwargs)
+    _log_nonfinite_parameter_grads(args[0], phase="after_lora_grad_reduction")
+    result = finalize_model_grads(*args, **kwargs)
+    _log_nonfinite_parameter_grads(args[0], phase="after_finalize_model_grads")
+    return result
 
 
 def train(
