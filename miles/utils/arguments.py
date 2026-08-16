@@ -2545,6 +2545,12 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 "Auto-allocates a single port if not set.",
             )
             parser.add_argument(
+                "--session-server-startup-timeout-secs",
+                type=float,
+                default=30.0,
+                help="Maximum seconds to wait for each standalone session server to become ready.",
+            )
+            parser.add_argument(
                 "--tito-model",
                 type=str,
                 default="default",

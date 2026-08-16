@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from tests.fast.ray.rollout.conftest import make_args
@@ -65,6 +65,26 @@ class TestStartSessionServer:
         with patch("miles.ray.rollout.router_manager.is_port_available", return_value=False):
             with pytest.raises(RuntimeError, match="already in use"):
                 start_session_server(args)
+
+    def test_configured_startup_timeout_is_forwarded(self):
+        args = make_args(
+            use_session_server=True,
+            hf_checkpoint="/fake/model",
+            sglang_router_ip="127.0.0.1",
+            sglang_router_port=20000,
+            session_server_ip="127.0.0.1",
+            session_server_port=[20001],
+            session_server_startup_timeout_secs=180.0,
+        )
+        context = MagicMock()
+        process = context.Process.return_value
+        with patch("miles.ray.rollout.router_manager.is_port_available", return_value=True), patch(
+            "miles.ray.rollout.router_manager.multiprocessing.get_context", return_value=context
+        ), patch("miles.ray.rollout.router_manager.wait_for_server_ready") as wait:
+            start_session_server(args)
+
+        process.start.assert_called_once_with()
+        wait.assert_called_once_with("127.0.0.1", 20001, process, timeout=180.0)
 
 
 class TestResolveSessionServerPorts:

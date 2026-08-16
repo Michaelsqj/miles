@@ -145,6 +145,7 @@ def start_session_server(args):
     # The per-port map OpenAIEndpointTracer.create reads instance ids from,
     # replacing the per-session /health probe.
     args.session_server_instance_ids = instance_ids
+    startup_timeout = getattr(args, "session_server_startup_timeout_secs", 30.0)
     for port, process in processes:
-        wait_for_server_ready(ip, port, process, timeout=30)
+        wait_for_server_ready(ip, port, process, timeout=startup_timeout)
     logger.info(f"Session servers launched at {ip}, ports {ports} ({len(ports)} instances)")
