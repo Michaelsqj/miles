@@ -368,7 +368,12 @@ class SessionCore:
             raise SessionNotFoundError(f"session not found: session_id={session_id}")
 
         # --- Phase 1: prepare request (lock held briefly) ---
+        # Stage timing: a turn's wall clock is otherwise one opaque number, so a
+        # slow turn cannot be attributed between lock contention, TITO
+        # tokenization, the engine itself, and post-response state update.
+        _t_enter = time.monotonic()
         async with session.lock:
+            _t_lock1 = time.monotonic()
             if session.closing:
                 raise SessionNotFoundError(f"session not found: session_id={session_id}")
 
@@ -396,10 +401,17 @@ class SessionCore:
 
         # --- Phase 2: proxy to backend (NO lock held) ---
         headers = {**headers, "X-SMG-Routing-Key": session_id}
+        _t_prep_done = time.monotonic()
         result = await self.backend.do_proxy(
             ProxyRequest(method=method, query=query), "v1/chat/completions", body=proxy_body, headers=headers
         )
 
+        _t_proxy_done = time.monotonic()
+        _stage = {
+            "lock1_s": round(_t_lock1 - _t_enter, 4),
+            "prepare_s": round(_t_prep_done - _t_lock1, 4),
+            "proxy_s": round(_t_proxy_done - _t_prep_done, 4),
+        }
         # Non-200 (e.g. 400 context too long) passes through unrecorded so the
         # agent can retry or handle the error.
         if result["status_code"] != 200:
@@ -409,6 +421,7 @@ class SessionCore:
 
         # --- Phase 3: update state (lock held briefly) ---
         async with session.lock:
+            _t_lock3 = time.monotonic()
             if session.closing:
                 logger.warning(f"Session {session_id} closed during proxy, skipping state update")
                 return _chat_client_response(result, response, client_stream)
@@ -421,6 +434,7 @@ class SessionCore:
                 )
                 return _chat_client_response(result, response, client_stream)
 
+            _stage["lock3_s"] = round(_t_lock3 - _t_proxy_done, 4)
             session.update_pretokenized_state(
                 request_messages,
                 assistant_message,
@@ -429,6 +443,15 @@ class SessionCore:
                 max_trim_tokens=self.registry.tito_tokenizer.max_trim_tokens,
             )
 
+            _stage["update_s"] = round(time.monotonic() - _t_lock3, 4)
+            _stage["total_s"] = round(time.monotonic() - _t_enter, 4)
+            # session_stage lines are the only per-request attribution of a turn's
+            # wall clock across lock wait, tokenization, engine, and state update.
+            logger.info(
+                "session_stage sid=%s lock1=%.4f prepare=%.4f proxy=%.4f lock3=%.4f update=%.4f total=%.4f",
+                session_id, _stage["lock1_s"], _stage["prepare_s"], _stage["proxy_s"],
+                _stage["lock3_s"], _stage["update_s"], _stage["total_s"],
+            )
             record = SessionRecord(
                 timestamp=time.time(),
                 request_timestamp=request_timestamp,
