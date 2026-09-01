@@ -85,6 +85,7 @@ def make_args(**overrides: Any) -> Namespace:
         # routers / session server
         use_miles_router=False,
         use_session_server=False,
+        session_server_startup_timeout_secs=None,
         session_server_ip=None,
         session_server_port=None,
         session_server_workers=32,

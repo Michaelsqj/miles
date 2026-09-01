@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 _SERVER_READY_TIMEOUT_SECS = 120
 
 
+# Readiness budget for the spawned router/session-server children. The spawn
+# context re-imports the heavy transformers/megatron chain (~13s typical in
+# CI), and transient CI stalls have pushed startup past a 30s budget.
+_SERVER_READY_TIMEOUT_SECS = 120
+
+
 def start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool = False) -> tuple[str, int]:
     """Start sgl router or miles router and return (router_ip, router_port).
 
@@ -149,7 +155,10 @@ def start_session_server(args):
     # The per-port map OpenAIEndpointTracer.create reads instance ids from,
     # replacing the per-session /health probe.
     args.session_server_instance_ids = instance_ids
-    startup_timeout = getattr(args, "session_server_startup_timeout_secs", 30.0)
+    # Unset keeps the built-in budget, so upstream's rationale for that number
+    # stays authoritative; an explicit flag overrides it for recipes whose
+    # session-server startup is slower than CI's.
+    startup_timeout = args.session_server_startup_timeout_secs or _SERVER_READY_TIMEOUT_SECS
     for port, process in processes:
         wait_for_server_ready(ip, port, process, timeout=startup_timeout)
     logger.info(f"Session servers launched at {ip}, ports {ports} ({len(ports)} instances)")

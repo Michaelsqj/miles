@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from miles.ray.rollout import router_manager
 from tests.fast.ray.rollout.conftest import make_args
 
 from miles.ray.rollout.router_manager import _resolve_session_server_ports, start_router, start_session_server
@@ -85,6 +86,23 @@ class TestStartSessionServer:
 
         process.start.assert_called_once_with()
         wait.assert_called_once_with("127.0.0.1", 20001, process, timeout=180.0)
+
+    def test_unset_startup_timeout_keeps_builtin_budget(self):
+        args = make_args(
+            use_session_server=True,
+            hf_checkpoint="/fake/model",
+            sglang_router_ip="127.0.0.1",
+            sglang_router_port=20000,
+            session_server_ip="127.0.0.1",
+            session_server_port=[20001],
+        )
+        context = MagicMock()
+        with patch("miles.ray.rollout.router_manager.is_port_available", return_value=True), patch(
+            "miles.ray.rollout.router_manager.multiprocessing.get_context", return_value=context
+        ), patch("miles.ray.rollout.router_manager.wait_for_server_ready") as wait:
+            start_session_server(args)
+
+        assert wait.call_args.kwargs["timeout"] == router_manager._SERVER_READY_TIMEOUT_SECS
 
 
 class TestResolveSessionServerPorts:
