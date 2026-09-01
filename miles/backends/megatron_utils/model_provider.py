@@ -128,6 +128,13 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
+def attach_value_head(model: GPTModel, config: TransformerConfig) -> GPTModel:
+    """Replace the LM head with a scalar value head and declare it on the config."""
+    model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
+    config.output_layer_is_value_head = True
+    return model
+
+
 def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
@@ -150,11 +157,8 @@ def get_model_provider_func(
                 model = custom_model_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
             else:
                 model = custom_model_provider(pre_process=pre_process, post_process=post_process)
-            # Apply critic output layer if needed
             if post_process and role == "critic":
-                model.output_layer = LinearForLastLayer(
-                    input_size=model.config.hidden_size, output_size=1, config=model.config
-                )
+                attach_value_head(model, model.config)
             _maybe_install_witness(args, model)
             return model
 
@@ -191,6 +195,8 @@ def get_model_provider_func(
                 return out[0] if isinstance(out, tuple) else out
 
             model.forward = _logits_only_forward
+            if post_process and role == "critic":
+                attach_value_head(model, model.config)
             return model
 
         return wrapped_bridge_provider
@@ -321,7 +327,7 @@ def get_model_provider_func(
             model = GPTModel(**kwargs)
 
         if post_process and role == "critic":
-            model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
+            attach_value_head(model, config)
 
         _maybe_install_witness(args, model)
 

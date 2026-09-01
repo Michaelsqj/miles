@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 from megatron.core.utils import get_attr_wrapped_model
 
-from miles.utils.hf_config import load_hf_config
 from miles.utils.multi_lora import is_multi_lora_enabled, targets_expert_leaves
 
 from .lora_utils import convert_target_modules_to_hf, patch_param_grad_buffer_for_colocate_mode_lora
@@ -33,11 +32,11 @@ def _ensure_model_list(model):
     return model if isinstance(model, list) else [model]
 
 
-def _make_value_model_hook(hidden_size: int, sequence_parallel: bool):
+def _make_value_model_hook():
     """Create a pre-wrap hook that replaces the output layer with a value head."""
     from megatron.core import parallel_state
 
-    from .model_provider import LinearForLastLayer
+    from .model_provider import attach_value_head
 
     def hook(model):
         model_post_process = []
@@ -56,11 +55,8 @@ def _make_value_model_hook(hidden_size: int, sequence_parallel: bool):
         for index, model_chunk in enumerate(model_list):
             if not model_post_process[index]:
                 continue
-            model_chunk.output_layer = LinearForLastLayer(
-                input_size=hidden_size,
-                output_size=1,
-                sequence_parallel=sequence_parallel,
-            )
+            attach_value_head(model_chunk, model_chunk.config)
+        return model
 
     return hook
 
@@ -109,7 +105,7 @@ def _validate_multi_lora_moe_support(args: Namespace, provider) -> None:
     ), "Multi-LoRA on MoE experts requires moe_permute_fusion=False."
 
 
-def _setup_lora_model_via_bridge(args: Namespace) -> list:
+def _setup_lora_model_via_bridge(args: Namespace, role: str = "actor") -> list:
     """Build Megatron model with LoRA using Megatron-Bridge.
 
     This handles:
@@ -127,7 +123,6 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
     from megatron.bridge import AutoBridge
     from megatron.bridge.training.config import DistributedDataParallelConfig
 
-    hf_config = load_hf_config(args.hf_checkpoint)
     bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
     provider = bridge.to_megatron_provider(load_weights=False)
 
@@ -176,20 +171,18 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
 
         lora = create_lora_instance(args)
 
+    if role == "critic":
+        # The freshly initialized value head has no adapter; it must survive the
+        # PEFT freeze and be saved alongside the adapters.
+        lora.modules_to_save = ["output_layer"]
+        provider.register_pre_wrap_hook(_make_value_model_hook())
+
     def apply_lora_hook(model_chunks):
         transformed = lora(model_chunks, training=True)
         lora.set_params_to_save(transformed)
         return transformed
 
     provider.register_pre_wrap_hook(apply_lora_hook)
-
-    is_value_model = (
-        "ForTokenClassification" in hf_config.architectures[0]
-        or "ForSequenceClassification" in hf_config.architectures[0]
-    )
-    if is_value_model:
-        hidden_size = hf_config.text_config.hidden_size if hasattr(hf_config, "text_config") else hf_config.hidden_size
-        provider.register_pre_wrap_hook(_make_value_model_hook(hidden_size, provider.sequence_parallel))
 
     use_distributed_optimizer = "muon" not in (args.optimizer or "").lower()
     if is_multi_lora_enabled(args):
