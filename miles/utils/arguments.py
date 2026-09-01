@@ -2554,6 +2554,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--session-collect-timeout-secs",
+                type=float,
+                default=None,
+                help=(
+                    "Maximum seconds for one POST /sessions/<id>/samples collection. "
+                    "Unset keeps the built-in budget. Assembling a long compacted "
+                    "trajectory can exceed it, and the sample is then discarded."
+                ),
+            )
+            parser.add_argument(
                 "--tito-model",
                 type=str,
                 default="default",

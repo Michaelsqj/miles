@@ -28,6 +28,7 @@ class OpenAIEndpointTracer:
         session_id: str,
         session_server_instance_id: str | None = None,
         samples_wire_fields: tuple[str, ...] = COMPUTED_FIELDS,
+        request_timeout: float = _SESSION_REQUEST_TIMEOUT,
     ):
         self.router_url = router_url
         self.session_id = session_id
@@ -37,6 +38,7 @@ class OpenAIEndpointTracer:
         # extended under --use-session-server v2 (create() selects from args;
         # direct constructions keep v1).
         self.samples_wire_fields = samples_wire_fields
+        self.request_timeout = request_timeout
 
     @property
     def session_server_id(self) -> str:
@@ -66,6 +68,7 @@ class OpenAIEndpointTracer:
             session_id=session_id,
             session_server_instance_id=session_server_instance_id,
             samples_wire_fields=COMPUTED_FIELDS_V2 if use_v2 else COMPUTED_FIELDS,
+            request_timeout=getattr(args, "session_collect_timeout_secs", None) or _SESSION_REQUEST_TIMEOUT,
         )
 
     async def collect_samples(
@@ -80,13 +83,13 @@ class OpenAIEndpointTracer:
             payload = await post_bytes_no_retry(
                 f"{self.base_url}/samples",
                 body,
-                timeout=_SESSION_REQUEST_TIMEOUT,
+                timeout=self.request_timeout,
             )
         finally:
             try:
                 await asyncio.wait_for(
                     post(self.base_url, {}, action="delete"),
-                    timeout=_SESSION_REQUEST_TIMEOUT,
+                    timeout=self.request_timeout,
                 )
             except Exception as e:
                 logger.warning(f"Failed to delete session {self.session_id} after collecting samples: {e}")
