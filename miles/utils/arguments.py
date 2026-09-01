@@ -196,6 +196,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--critic-offload-train-target",
+                type=str,
+                choices=["cpu", "disk"],
+                default=None,
+                help=(
+                    "Offload target for the critic, when it must differ from the actor's. "
+                    "Shared actor/critic PPO backs up two models per node, which neither host "
+                    "RAM nor node-local NVMe may hold alone. Unset follows --offload-train-target."
+                ),
+            )
+            parser.add_argument(
                 "--stream-optimizer-state-to-disk",
                 action="store_true",
                 help=(
@@ -3359,13 +3370,14 @@ def miles_validate_args(args):
 
     _validate_rematerialize_param_from_master_weight(args)
 
-    if (args.offload_train_target == "disk" or args.stream_optimizer_state_to_disk) and (
+    _any_disk_offload = "disk" in (args.offload_train_target, args.critic_offload_train_target)
+    if (_any_disk_offload or args.stream_optimizer_state_to_disk) and (
         args.offload_train_disk_dir is None
     ):
         uid = os.getuid() if hasattr(os, "getuid") else 0
         args.offload_train_disk_dir = os.path.join(os.environ.get("SCRATCH", "/scratch"), f"miles_train_offload_{uid}")
 
-    if args.offload_train_target == "disk":
+    if _any_disk_offload:
         assert args.offload_train, "--offload-train-target=disk requires --offload-train"
         assert (
             args.train_backend == "megatron"

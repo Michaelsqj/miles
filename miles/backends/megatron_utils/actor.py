@@ -164,7 +164,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 # --train-memory-margin-bytes can tune this
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
                 torch_memory_saver.memory_margin_bytes = x
-            if args.offload_train_target == "disk":
+            if os.environ.get("TMS_INIT_ENABLE_DISK_BACKUP") == "1":
                 _setup_disk_offload_reclaim(os.environ.get("TMS_DISK_BACKUP_DIR"))
 
         if self.args.debug_rollout_only:

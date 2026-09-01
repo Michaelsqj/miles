@@ -41,6 +41,10 @@ def allocate_gpus_for_actor(
     if source_patcher_config := args.dumper_source_patcher_config_train:
         env_vars["DUMPER_SOURCE_PATCHER_CONFIG"] = source_patcher_config
 
+    offload_target = args.offload_train_target
+    if role == "critic" and getattr(args, "critic_offload_train_target", None):
+        offload_target = args.critic_offload_train_target
+
     if args.offload_train and args.train_backend == "megatron":
         from torch_memory_saver.utils import get_binary_path_from_package
 
@@ -48,7 +52,7 @@ def allocate_gpus_for_actor(
 
         env_vars["LD_PRELOAD"] = dynlib_path
         env_vars["TMS_INIT_ENABLE"] = "1"
-        if args.offload_train_target == "disk":
+        if offload_target == "disk":
             assert b"TMS_INIT_ENABLE_DISK_BACKUP" in Path(dynlib_path).read_bytes(), (
                 f"{dynlib_path} has no disk backend; reinstall torch_memory_saver at the commit "
                 f"docker/Dockerfile pins."
@@ -89,7 +93,7 @@ def allocate_gpus_for_actor(
                 placement_group_bundle_index=reordered_bundle_indices[rank],
             ),
         )
-        if args.offload_train_target == "disk" and args.offload_train and args.train_backend == "megatron":
+        if offload_target == "disk" and args.offload_train and args.train_backend == "megatron":
             role_tag = "" if role == "actor" else f"{role}_"
             rank_dir = os.path.join(args.offload_train_disk_dir, f"{role_tag}cell{cell_index}_rank{rank}")
             options["runtime_env"] = {"env_vars": {**env_vars, "TMS_DISK_BACKUP_DIR": rank_dir}}
