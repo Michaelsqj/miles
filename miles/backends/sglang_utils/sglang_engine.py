@@ -123,6 +123,13 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
             time.sleep(2)
 
 
+# A rollout closes while stragglers may still be decoding, and flush_cache
+# refuses until the engine is empty. Budget for a long straggler rather than
+# killing the run: the previous 60s cost two runs at step 3 and step 1.
+_FLUSH_CACHE_TIMEOUT_SECS = 1800
+_FLUSH_CACHE_REPORT_EVERY_SECS = 60
+
+
 class SGLangEngine(RayActor):
     def __init__(
         self,
@@ -443,24 +450,50 @@ class SGLangEngine(RayActor):
         )
 
     def flush_cache(self):
-        """Flush the cache of the server."""
+        """Flush the cache of the server.
+
+        The engine refuses to flush while any request is still in flight, so this
+        is really "wait for the engine to drain, then flush". pause_generation
+        runs first and is supposed to have emptied it, but no pause mode
+        guarantees a drain: `retract` returns requests to the waiting queue,
+        `in_place` leaves the running batch untouched, and even `abort` only
+        loops on abort_request(abort_all=True) -- a request already inside a long
+        decode can survive it. A single straggler therefore stalls the flush, and
+        the caller (release_memory_occupation -> RolloutManager.offload) turns
+        that into a fatal TimeoutError that kills the whole run.
+
+        A 60s budget is far shorter than a straggler's remaining decode, so wait
+        long enough for one to finish. Progress is logged because a silent
+        multi-minute wait here is indistinguishable from a hang.
+        """
         if self.node_rank != 0:
             return
         last_message = None
-        for _ in range(60):
+        deadline = time.monotonic() + _FLUSH_CACHE_TIMEOUT_SECS
+        next_report = time.monotonic() + _FLUSH_CACHE_REPORT_EVERY_SECS
+        while True:
             try:
                 response = requests.get(f"http://{self.server_host}:{self.server_port}/flush_cache")
                 if response.status_code == 200:
-                    break
+                    return
                 last_message = response.text
             except NewConnectionError as e:
                 raise e
             except Exception as e:
                 logger.info(f"Error flushing cache: {e}")
                 last_message = str(e)
+            now = time.monotonic()
+            if now >= deadline:
+                raise TimeoutError(
+                    f"Timeout while flushing cache after {_FLUSH_CACHE_TIMEOUT_SECS}s: {last_message}"
+                )
+            if now >= next_report:
+                logger.info(
+                    f"Waiting for {self.server_host}:{self.server_port} to drain before flush "
+                    f"({deadline - now:.0f}s left): {last_message}"
+                )
+                next_report = now + _FLUSH_CACHE_REPORT_EVERY_SECS
             time.sleep(1)
-        else:
-            raise TimeoutError(f"Timeout while flushing cache: {last_message}")
 
     def shutdown(self):
         if self.args.rollout_external:
