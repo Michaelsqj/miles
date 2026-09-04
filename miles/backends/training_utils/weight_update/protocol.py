@@ -6,8 +6,8 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import ClassVar
 
 import torch
-from ray.actor import ActorHandle
 
+from miles.backends.sglang_utils.sglang_api_client import SGLangApiClient
 from miles.backends.training_utils.parallel import ParallelState
 from miles.backends.training_utils.weight_update.hf_weight_iterator import WeightUpdatePlacement
 
@@ -28,7 +28,7 @@ class WeightTransferProtocol(ABC):
 
     def __init__(self, args: Namespace) -> None:
         self.args = args
-        self.rollout_engines: Sequence[ActorHandle] | None = None
+        self.rollout_engines: Sequence[SGLangApiClient] | None = None
         self._connection_stale = False
         self.is_sender: bool | None = None
         self.group_name = "miles"
@@ -37,8 +37,7 @@ class WeightTransferProtocol(ABC):
     @abstractmethod
     def connect(
         self,
-        rollout_engines: Sequence[ActorHandle],
-        rollout_engine_lock: ActorHandle | None,
+        rollout_engines: Sequence[SGLangApiClient],
         engine_gpu_counts: Sequence[int] | None,
         engine_gpu_offsets: Sequence[int] | None,
         parallel_state: ParallelState,
@@ -76,7 +75,7 @@ class WeightTransferProtocol(ABC):
 
 
 def get_weight_transfer_protocol(args: Namespace) -> WeightTransferProtocol:
-    if args.colocate and args.update_weight_transfer_mode != "rdt":
+    if args.colocate:
         from miles.backends.training_utils.weight_update.protocols.cuda_ipc import UpdateWeightFromTensor
 
         return UpdateWeightFromTensor(args)
@@ -88,10 +87,6 @@ def get_weight_transfer_protocol(args: Namespace) -> WeightTransferProtocol:
         from miles.backends.training_utils.weight_update.protocols.delta import UpdateWeightFromDiskDelta
 
         return UpdateWeightFromDiskDelta(args)
-    if args.update_weight_transfer_mode == "rdt":
-        from miles.backends.training_utils.weight_update.protocols.rdt import UpdateWeightFromRDT
-
-        return UpdateWeightFromRDT(args)
     if args.update_weight_transfer_mode == "p2p":
         from miles.backends.training_utils.weight_update.protocols.p2p import UpdateWeightP2P
 

@@ -15,7 +15,7 @@ from torch_memory_saver import torch_memory_saver
 from miles.backends.megatron_utils.rematerialize_utils import build_main_cast_context
 from miles.dashboard import hooks as dashboard_hooks
 from miles.ray.train_actor import TrainRayActor
-from miles.utils import train_dump_utils
+from miles.utils import async_utils, train_dump_utils
 from miles.utils.argparse_utils import inplace_modify_args
 from miles.utils.audit_utils.event_logger.logger import event_logger_context
 from miles.utils.audit_utils.witness.allocator import WitnessInfo
@@ -60,7 +60,7 @@ from .parallel import verify_megatron_parallel_state
 from .replay_utils import register_replay_list_moe
 
 if TYPE_CHECKING:
-    from miles.ray.rollout.rollout_manager import EnginesAndLock
+    from miles.ray.rollout.inference_controller import UpdatableEngines
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
@@ -252,7 +252,7 @@ class MegatronTrainRayActor(TrainRayActor):
         from .update_weight.hf_weight_iterator import get_hf_weight_iterator
 
         is_lora = lora_rollout_enabled(args)
-        uses_colocate_protocol = self.args.colocate and self.args.update_weight_transfer_mode != "rdt"
+        uses_colocate_protocol = self.args.colocate
         if is_lora and not uses_colocate_protocol:
             assert args.megatron_to_hf_mode == "bridge", (
                 "LoRA weight sync over distributed engines requires "
@@ -285,7 +285,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.rollout_data_postprocess = None
         if (x := self.args.rollout_data_postprocess_path) is not None:
-            from miles.utils.misc import load_function
+            from miles.utils.function_registry import load_function
 
             self.rollout_data_postprocess = load_function(x)
 
@@ -733,7 +733,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             from megatron.training.checkpointing import get_checkpoint_name
 
-            from miles.utils.misc import load_function
+            from miles.utils.function_registry import load_function
 
             checkpoint_dir = get_checkpoint_name(self.args.save, rollout_id, return_base_dir=True)
             hf_checkpoint_dir = (
@@ -777,13 +777,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
     @with_logs
     @timer
-    def update_weights(self, info: "EnginesAndLock") -> None:
+    def update_weights(self, info: "UpdatableEngines") -> None:
         self._heartbeat.bump()
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
         rollout_engines = info.rollout_engines
-        rollout_engine_lock = info.rollout_engine_lock
         has_new_engines = info.has_new_engines
         engine_gpu_counts = info.engine_gpu_counts
         engine_gpu_offsets = info.engine_gpu_offsets
@@ -796,13 +795,10 @@ class MegatronTrainRayActor(TrainRayActor):
         if has_new_engines or not self.weight_updater.is_rollout_engines_fresh():
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
-                rollout_engine_lock,
                 engine_gpu_counts=engine_gpu_counts,
                 engine_gpu_offsets=engine_gpu_offsets,
             )
             dist.barrier(group=get_gloo_group())
-            if dist.get_rank() == 0:
-                ray.get(self.rollout_manager.clear_updatable_has_new_engines.remote())
 
         if self.args.debug_skip_weight_update:
             if dist.get_rank() == 0:
@@ -836,7 +832,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             if self.args.ci_test and len(rollout_engines) > 0 and not is_lora_enabled(self.args):
                 engine = random.choice(rollout_engines)
-                engine_version = ray.get(engine.get_weight_version.remote())
+                engine_version = async_utils.run(engine.get_weight_version())
                 if str(engine_version) != str(self.weight_updater.weight_version):
                     raise RuntimeError(
                         f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
