@@ -13,6 +13,7 @@ from miles.utils.arguments import (
     _resolve_ft_components,
     _resolve_rollout_functions,
     _validate_rematerialize_param_from_master_weight,
+    _set_offload_buffer_backup_defaults,
     get_miles_extra_args_provider,
     miles_validate_args,
     resolve_rollout_function_paths,
@@ -1086,3 +1087,34 @@ class TestValidateSkipActorForwardOnly:
                 use_dynamic_global_batch_size=True,
             )
         )
+
+class TestSetOffloadBufferBackupDefaults:
+    def _make_args(self, **overrides) -> SimpleNamespace:
+        args = SimpleNamespace(
+            offload_train=True,
+            colocate=False,
+            disable_grad_buffers_cpu_backup=False,
+            disable_param_buffers_cpu_backup=False,
+        )
+        for key, value in overrides.items():
+            setattr(args, key, value)
+        return args
+
+    def test_colocated_actor_drops_both_backups(self):
+        args = self._make_args(colocate=True)
+        _set_offload_buffer_backup_defaults(args)
+        assert args.disable_grad_buffers_cpu_backup is True
+        assert args.disable_param_buffers_cpu_backup is True
+
+    def test_disaggregated_actor_keeps_the_param_backup(self):
+        """No weights_backuper exists without --colocate; the memory saver's copy is the only one."""
+        args = self._make_args(colocate=False)
+        _set_offload_buffer_backup_defaults(args)
+        assert args.disable_grad_buffers_cpu_backup is True
+        assert args.disable_param_buffers_cpu_backup is False
+
+    def test_noop_without_offload(self):
+        args = self._make_args(offload_train=False, colocate=True)
+        _set_offload_buffer_backup_defaults(args)
+        assert args.disable_grad_buffers_cpu_backup is False
+        assert args.disable_param_buffers_cpu_backup is False
