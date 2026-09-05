@@ -62,10 +62,14 @@ def compute_advantages_and_returns(
     total_lengths: list[int] = rollout_data.get("total_lengths")
     max_seq_lens: list[int] | None = rollout_data.get("max_seq_lens", None)
 
-    # return when not the last pp stage.
-    if log_probs is None and values is None:
-        if not (allow_missing_log_probs and get_parallel_state().is_pp_last_stage):
-            return
+    # return when not the last pp stage. Ask the parallel state directly:
+    # inferring "intermediate stage" from log_probs and values both being None
+    # breaks under --use-rollout-logprobs, where log_probs come from the rollout
+    # and are present on every stage while values exist only on the last one.
+    if not get_parallel_state().is_pp_last_stage:
+        return
+    if log_probs is None and values is None and not allow_missing_log_probs:
+        return
 
     # This is the authoritative persistence boundary: scores produced before
     # the policy update are fixed training data and must not retain a graph.
