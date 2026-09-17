@@ -803,10 +803,9 @@ class MegatronTrainRayActor(TrainRayActor):
         process_groups_are_temporary = self.args.offload_train and self._asleep
         if process_groups_are_temporary:
             reload_process_groups()
-        # Disaggregated weight sync reads GPU parameters; colocated sync reads CPU backups.
         resume_for_weight_sync = process_groups_are_temporary and not self.args.colocate
         if resume_for_weight_sync:
-            # Match sleep/wake_up: LoRA keeps adapter params and gradients resident.
+            # LoRA adapter buffers must stay resident across weight sync.
             offload_tag = "default" if lora_rollout_enabled(self.args) else None
             torch_memory_saver.resume(tag=offload_tag)
 
