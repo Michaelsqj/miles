@@ -281,6 +281,51 @@ def test_wake_up_resumes_offloaded_model_once(actor_module, monkeypatch):
     assert worker._asleep is False
 
 
+@pytest.mark.parametrize("lora_rank", [0, 8])
+@pytest.mark.parametrize("debug_skip_weight_update", [False, True])
+def test_weight_update_preserves_sleep_regions(actor_module, monkeypatch, lora_rank, debug_skip_weight_update):
+    worker, saver, _ = _lifecycle_worker(actor_module, monkeypatch, asleep=False)
+    worker.args.colocate = False
+    worker.args.lora_rank = lora_rank
+    worker.args.debug_train_only = False
+    worker.args.debug_rollout_only = False
+    worker.args.debug_skip_weight_update = debug_skip_weight_update
+    worker.args.ci_test = False
+    worker._heartbeat = Mock()
+    worker.weight_updater = Mock()
+    worker.weight_updater.conn_status.needs_reconnect.return_value = False
+    monkeypatch.setattr(actor_module.dist, "get_rank", lambda: 1)
+
+    regions = {"default", "param_buffer", "grad_buffer"}
+    paused = set()
+    saver.pause.side_effect = lambda tag=None: paused.update(regions if tag is None else {tag})
+    saver.resume.side_effect = lambda tag=None: paused.difference_update(regions if tag is None else {tag})
+    saver.disable.side_effect = nullcontext
+
+    def broadcast():
+        assert not paused
+
+    worker.weight_updater.update_weights.side_effect = broadcast
+    info = SimpleNamespace(
+        rollout_engines=[], snapshot_cell_id_to_hashes={}, engine_gpu_counts=[], engine_gpu_offsets=[]
+    )
+
+    worker.sleep()
+    sleeping_regions = {"default"} if lora_rank else regions
+    assert paused == sleeping_regions
+
+    worker.update_weights(info)
+
+    assert paused == sleeping_regions
+    assert worker._asleep is True
+    assert worker.weight_updater.update_weights.call_count == int(not debug_skip_weight_update)
+
+    worker.wake_up()
+
+    assert not paused
+    assert worker._asleep is False
+
+
 def _actor_train_args(**overrides):
     defaults = dict(
         compute_advantages_and_returns=True,

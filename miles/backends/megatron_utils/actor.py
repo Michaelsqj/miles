@@ -816,7 +816,9 @@ class MegatronTrainRayActor(TrainRayActor):
         # weights_backuper copy instead and never touch the paused buffers.
         params_are_paused = process_groups_are_temporary and not self.args.colocate
         if params_are_paused:
-            torch_memory_saver.resume()
+            # Match sleep/wake_up: LoRA keeps adapter params and gradients resident.
+            offload_tag = "default" if lora_rollout_enabled(self.args) else None
+            torch_memory_saver.resume(tag=offload_tag)
 
         needs_reconnect = self.weight_updater.conn_status.needs_reconnect(snapshot_cell_id_to_hashes)
         if needs_reconnect:
@@ -834,7 +836,7 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.args.rematerialize_param_from_master_weight:
                 torch_memory_saver.pause(tag="param_buffer")
             if params_are_paused:
-                torch_memory_saver.pause()
+                torch_memory_saver.pause(tag=offload_tag)
             if process_groups_are_temporary:
                 destroy_process_groups()
             return None
@@ -883,7 +885,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.rematerialize_param_from_master_weight:
             torch_memory_saver.pause(tag="param_buffer")
         if params_are_paused:
-            torch_memory_saver.pause()
+            torch_memory_saver.pause(tag=offload_tag)
         if process_groups_are_temporary:
             destroy_process_groups()
 
