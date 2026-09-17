@@ -473,16 +473,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     attempt=attempt,
                 )
 
-        if torch.cuda.is_available() and dist.is_initialized():
-            peak_alloc_gb = torch.cuda.max_memory_allocated() / 1024**3
-            peak_reserved_gb = torch.cuda.max_memory_reserved() / 1024**3
-            logger.info(
-                f"[Rank {dist.get_rank()}] {self.role} train phase peak memory: "
-                f"allocated {peak_alloc_gb:.2f} GB, reserved {peak_reserved_gb:.2f} GB"
-            )
-            torch.cuda.reset_peak_memory_stats()
-
-        # The co-resident actor/critic process cannot reclaim this process's allocator cache.
         del rollout_data
         clear_memory()
         return result
