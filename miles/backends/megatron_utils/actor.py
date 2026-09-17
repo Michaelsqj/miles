@@ -804,8 +804,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if process_groups_are_temporary:
             reload_process_groups()
         # Disaggregated weight sync reads GPU parameters; colocated sync reads CPU backups.
-        params_are_paused = process_groups_are_temporary and not self.args.colocate
-        if params_are_paused:
+        resume_for_weight_sync = process_groups_are_temporary and not self.args.colocate
+        if resume_for_weight_sync:
             # Match sleep/wake_up: LoRA keeps adapter params and gradients resident.
             offload_tag = "default" if lora_rollout_enabled(self.args) else None
             torch_memory_saver.resume(tag=offload_tag)
@@ -825,7 +825,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.warning("Skipping actor-to-rollout weight update because " "--debug-skip-weight-update is set.")
             if self.args.rematerialize_param_from_master_weight:
                 torch_memory_saver.pause(tag="param_buffer")
-            if params_are_paused:
+            if resume_for_weight_sync:
                 torch_memory_saver.pause(tag=offload_tag)
             if process_groups_are_temporary:
                 destroy_process_groups()
@@ -874,7 +874,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.rematerialize_param_from_master_weight:
             torch_memory_saver.pause(tag="param_buffer")
-        if params_are_paused:
+        if resume_for_weight_sync:
             torch_memory_saver.pause(tag=offload_tag)
         if process_groups_are_temporary:
             destroy_process_groups()

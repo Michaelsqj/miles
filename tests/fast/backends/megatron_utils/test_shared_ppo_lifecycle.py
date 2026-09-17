@@ -190,7 +190,7 @@ def test_save_model_does_not_manage_lifecycle(actor_module, monkeypatch):
     destroy_groups.assert_not_called()
 
 
-@pytest.mark.parametrize("colocate", [False, True])
+@pytest.mark.parametrize("colocate", [False, True], ids=["disaggregated", "colocated"])
 @pytest.mark.parametrize("asleep", [False, True])
 def test_update_weights_only_uses_temporary_process_groups_when_asleep(actor_module, monkeypatch, asleep, colocate):
     """Weight update reloads and destroys temporary process groups only when the model is offloaded."""
@@ -228,11 +228,11 @@ def test_update_weights_only_uses_temporary_process_groups_when_asleep(actor_mod
 
     assert reload_groups.call_count == int(asleep)
     assert destroy_groups.call_count == int(asleep)
-    expected = int(asleep and not colocate)
-    assert saver.resume.call_count == expected
-    assert saver.pause.call_count == expected
-    if expected:
-        assert saver.method_calls.index(saver.method_calls[0]) == 0 and saver.method_calls[0][0] == "resume"
+    expected_resumes = int(asleep and not colocate)
+    assert saver.resume.call_count == expected_resumes
+    assert saver.pause.call_count == expected_resumes
+    if expected_resumes:
+        assert saver.method_calls[0][0] == "resume"
 
 
 def _lifecycle_worker(actor_module, monkeypatch, asleep):
@@ -287,8 +287,8 @@ def test_wake_up_resumes_offloaded_model_once(actor_module, monkeypatch):
     assert worker._asleep is False
 
 
-@pytest.mark.parametrize("lora_rank", [0, 8])
-@pytest.mark.parametrize("debug_skip_weight_update", [False, True])
+@pytest.mark.parametrize("lora_rank", [0, 8], ids=["full_weight", "lora"])
+@pytest.mark.parametrize("debug_skip_weight_update", [False, True], ids=["broadcast", "skip_broadcast"])
 def test_weight_update_preserves_sleep_regions(actor_module, monkeypatch, lora_rank, debug_skip_weight_update):
     worker, saver, _ = _lifecycle_worker(actor_module, monkeypatch, asleep=False)
     worker.args.colocate = False
@@ -303,32 +303,32 @@ def test_weight_update_preserves_sleep_regions(actor_module, monkeypatch, lora_r
     monkeypatch.setattr(actor_module.dist, "get_rank", lambda: 1)
 
     regions = {"default", "param_buffer", "grad_buffer"}
-    paused = set()
-    saver.pause.side_effect = lambda tag=None: paused.update(regions if tag is None else {tag})
-    saver.resume.side_effect = lambda tag=None: paused.difference_update(regions if tag is None else {tag})
+    paused_regions = set()
+    saver.pause.side_effect = lambda tag=None: paused_regions.update(regions if tag is None else {tag})
+    saver.resume.side_effect = lambda tag=None: paused_regions.difference_update(regions if tag is None else {tag})
     saver.disable.side_effect = nullcontext
 
     def broadcast():
-        assert not paused
+        assert not paused_regions
 
     worker.weight_updater.update_weights.side_effect = broadcast
-    info = SimpleNamespace(
+    engines = SimpleNamespace(
         rollout_engines=[], snapshot_cell_id_to_hashes={}, engine_gpu_counts=[], engine_gpu_offsets=[]
     )
 
     worker.sleep()
     sleeping_regions = {"default"} if lora_rank else regions
-    assert paused == sleeping_regions
+    assert paused_regions == sleeping_regions
 
-    worker.update_weights(info)
+    worker.update_weights(engines)
 
-    assert paused == sleeping_regions
+    assert paused_regions == sleeping_regions
     assert worker._asleep is True
     assert worker.weight_updater.update_weights.call_count == int(not debug_skip_weight_update)
 
     worker.wake_up()
 
-    assert not paused
+    assert not paused_regions
     assert worker._asleep is False
 
 
