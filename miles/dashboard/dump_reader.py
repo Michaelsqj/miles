@@ -819,7 +819,7 @@ class DumpReader:
             tool_calls=_tool_call_count(sample),
             non_generation_time=sample.non_generation_time,
             spec_accept_rate=(
-                spec.spec_accept_token_num / spec.spec_draft_token_num if spec.spec_draft_token_num else None
+                spec.spec_num_correct_drafts / spec.spec_num_proposed_drafts if spec.spec_num_proposed_drafts else None
             ),
             prefix_cache_hit_rate=(
                 cache_info.cached_tokens / cache_info.total_prompt_tokens if cache_info.total_prompt_tokens else None
@@ -873,7 +873,8 @@ class DumpReader:
     def _visible(self, path: Path, rollout_id: int, *, evaluation: bool, now: float) -> bool:
         if now - path.stat().st_mtime > self.MIN_AGE_SECONDS:
             return True
-        return not evaluation and (self.train_dir / f"{rollout_id}_0.pt").exists()
+        # any rank number: with pp > 1 the dumping ranks no longer include global rank 0
+        return not evaluation and any(self.train_dir.glob(f"{rollout_id}_*.pt"))
 
     def _torch_load(self, path: Path, *, mmap: bool = False):
         try:

@@ -104,10 +104,9 @@ What changes relative to the single-node recipe, and why:
   `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` keeps reserved memory close to live memory:
   the linear-attention Triton kernels benchmark each new sequence-length bucket at runtime with
   memory the caching allocator never gives back, and a fragmented allocator starves them.
-  `--offload-train` is the alternative when the pair does not fit: a disaggregated actor then keeps
-  the memory saver's CPU copy of its parameter buffer and resumes it around `update_weights`
-  (colocated actors read `weights_backuper` instead) — but the memory saver refuses expandable
-  segments, so that path fragments instead.
+  `--offload-train` is the alternative when the pair does not fit: sleeping actors synchronize
+  weights from their CPU backups without resuming GPU buffers. The memory saver refuses
+  expandable segments, so the offload path cannot use this allocator setting.
 * **`PP=2` is what makes a 27B actor + 27B critic fit on 8 × 140 GB per node**; `TP` is capped at
   4 by the model's 4 KV groups. Under `--use-rollout-logprobs` the intermediate pipeline stage has
   log probs but no values, which `compute_advantages_and_returns` handles by asking the parallel

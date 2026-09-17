@@ -14,7 +14,6 @@ from miles.utils.arguments import (
     _resolve_ft_components,
     _resolve_mini_ft_controller_enable,
     _resolve_rollout_functions,
-    _set_offload_buffer_backup_defaults,
     _validate_rematerialize_param_from_master_weight,
     get_miles_extra_args_provider,
     miles_validate_args,
@@ -626,6 +625,52 @@ class TestSessionServerPauseGenerationMode:
         assert warned is expect_warning
 
 
+class TestSnapshotEvalValidation:
+    def _parse(self, extra):
+        parser = argparse.ArgumentParser()
+        get_miles_extra_args_provider()(parser)
+        return parser.parse_args(extra + ["--num-rollout", "1"] + REQUIRED_ARGS)
+
+    def _snapshot_eval_args(self, tmp_path, *extra):
+        prompts = tmp_path / "eval.jsonl"
+        prompts.write_text("{}\n")
+        return self._parse(
+            [
+                "--eval-num-gpus",
+                "1",
+                "--eval-interval",
+                "5",
+                "--eval-hf-dir",
+                str(tmp_path / "snapshots"),
+                "--eval-prompt-data",
+                "dummy",
+                str(prompts),
+                *extra,
+            ]
+        )
+
+    def test_snapshot_eval_rejects_load_debug_rollout_data(self, tmp_path):
+        """The replay path loads no rollout functions, so there is nothing to run the eval with."""
+        args = self._snapshot_eval_args(tmp_path, "--load-debug-rollout-data", "/tmp/rollout_{rollout_id}.pt")
+        with pytest.raises(AssertionError, match="load-debug-rollout-data"):
+            miles_validate_args(args)
+
+    def test_train_only_snapshot_eval_needs_its_own_eval_function(self, tmp_path):
+        args = self._snapshot_eval_args(tmp_path, "--debug-train-only")
+        with pytest.raises(AssertionError, match="eval-function-path"):
+            miles_validate_args(args)
+
+    def test_train_only_leaves_no_rollout_gpus_even_under_colocate(self):
+        """The colocate normalization puts the actor's GPU count on rollout_num_gpus, which
+        would claim rollout engines for a job that starts none."""
+        args = self._parse(["--debug-train-only", "--colocate"])
+
+        miles_validate_args(args)
+
+        assert args.rollout_num_gpus == 0
+        assert args.starts_inference_engines is False
+
+
 class TestTitoFixedTemplateConfiguration:
     def _parse(self, extra):
         parser = argparse.ArgumentParser()
@@ -684,6 +729,28 @@ class TestTitoFixedTemplateConfiguration:
         miles_validate_args(args)
         assert args.chat_template_path.endswith("/qwen3.8_small_and_flash_next_fixed.jinja")
         assert args.apply_chat_template_kwargs == {"preserve_thinking": True, "reasoning_effort": "xhigh"}
+
+    def test_glm53_uses_native_template(self):
+        args = self._parse(["--use-session-server", "--tito-model", "glm53"])
+        miles_validate_args(args)
+        assert args.chat_template_path is None
+        assert args.apply_chat_template_kwargs == {
+            "clear_thinking": False,
+            "enable_thinking": True,
+        }
+
+    def test_glm53_rejects_disabling_thinking(self):
+        args = self._parse(
+            [
+                "--use-session-server",
+                "--tito-model",
+                "glm53",
+                "--apply-chat-template-kwargs",
+                '{"enable_thinking": false}',
+            ]
+        )
+        with pytest.raises(ValueError, match="enable_thinking=False conflicts"):
+            miles_validate_args(args)
 
     def test_named_family_rejects_custom_template(self):
         args = self._parse(
@@ -818,29 +885,6 @@ class TestMultiLoRAValidation:
         miles_validate_args(args)
 
         assert args.multi_lora is True
-
-    def test_defaults_rollout_fn_and_data_source_to_multi_lora(self):
-        args = self._parse([])
-
-        miles_validate_args(args)
-
-        assert args.rollout_function_path == "miles.rollout.multi_lora.async_rollout.generate_rollout_multi_lora"
-        assert args.data_source_path == "miles.rollout.multi_lora.data_source.MultiLoRAAsyncDataSource"
-        assert args.rollout_global_dataset is True
-
-    def test_keeps_user_supplied_rollout_fn_and_data_source(self):
-        args = self._parse(
-            ["--rollout-function-path", "my.custom.rollout_fn", "--data-source-path", "my.custom.DataSource"]
-        )
-
-        miles_validate_args(args)
-
-        assert args.rollout_function_path == "my.custom.rollout_fn"
-        assert args.data_source_path == "my.custom.DataSource"
-
-    def test_empty_wait_is_a_registered_argument(self):
-        assert self._parse([]).multi_lora_max_empty_wait_s == 30.0
-        assert self._parse(["--multi-lora-max-empty-wait-s", "5"]).multi_lora_max_empty_wait_s == 5.0
 
     def test_rejects_non_adam_optimizer(self):
         # Per-slot optimizer isolation (state init, retirement cleanup, step
@@ -1449,34 +1493,3 @@ class TestSessionServerArguments:
 
         assert args.session_server_workers == 32
         assert args.session_server_port is None
-
-
-class TestSetOffloadBufferBackupDefaults:
-    def _make_args(self, **overrides) -> SimpleNamespace:
-        args = SimpleNamespace(
-            offload_train=True,
-            colocate=False,
-            disable_grad_buffers_cpu_backup=False,
-            disable_param_buffers_cpu_backup=False,
-        )
-        for key, value in overrides.items():
-            setattr(args, key, value)
-        return args
-
-    def test_colocated_actor_drops_both_backups(self):
-        args = self._make_args(colocate=True)
-        _set_offload_buffer_backup_defaults(args)
-        assert args.disable_grad_buffers_cpu_backup is True
-        assert args.disable_param_buffers_cpu_backup is True
-
-    def test_disaggregated_actor_keeps_the_param_backup(self):
-        args = self._make_args(colocate=False)
-        _set_offload_buffer_backup_defaults(args)
-        assert args.disable_grad_buffers_cpu_backup is True
-        assert args.disable_param_buffers_cpu_backup is False
-
-    def test_noop_without_offload(self):
-        args = self._make_args(offload_train=False, colocate=True)
-        _set_offload_buffer_backup_defaults(args)
-        assert args.disable_grad_buffers_cpu_backup is False
-        assert args.disable_param_buffers_cpu_backup is False

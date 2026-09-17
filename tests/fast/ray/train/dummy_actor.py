@@ -60,9 +60,6 @@ class DummyTrainActor:
             return self._train_return_values_per_attempt.pop(0)
         return self._train_return_value
 
-    def reconcile_adapters(self) -> None:
-        self._record("reconcile_adapters", (), {})
-
     def set_rollout_executor(self, *args: Any, **kwargs: Any) -> None:
         self._record("set_rollout_executor", args, kwargs)
 
@@ -74,6 +71,9 @@ class DummyTrainActor:
 
     def clear_memory(self) -> None:
         self._record("clear_memory", (), {})
+
+    def offload_grad_buffer(self) -> None:
+        self._record("offload_grad_buffer", (), {})
 
     def save_model(self, *args: Any, **kwargs: Any) -> None:
         self._record("save_model", args, kwargs)
