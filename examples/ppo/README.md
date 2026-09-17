@@ -84,9 +84,15 @@ These are enforced at argument validation, so you get an error rather than a sil
 in flight continuously, and the actor + critic train on two other nodes at `TP=4`, `PP=2`, `DP=2`.
 `--colocate` is not allowed with `--fully-async`, so the placement is disaggregated.
 
+**Start the Ray cluster before running the launcher.** Start the head and join the other three
+nodes, then use `ray status` to confirm that all 32 GPUs are available. Make the model, dataset,
+and output directories accessible at the same paths on all nodes. Run the following on the head
+node; `MILES_SCRIPT_EXTERNAL_RAY=1` tells the launcher to use the existing cluster. The launcher
+checks this setting before downloading data or converting checkpoints.
+
 ```bash
 cd miles
-python examples/ppo/run_qwen3_8_27b_ppo_fully_async.py
+MILES_SCRIPT_EXTERNAL_RAY=1 python examples/ppo/run_qwen3_8_27b_ppo_fully_async.py
 ```
 
 What changes relative to the single-node recipe, and why:

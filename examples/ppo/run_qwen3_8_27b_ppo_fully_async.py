@@ -153,6 +153,9 @@ def execute(args: ScriptArgs):
 
 @U.dataclass_cli
 def main(args: ScriptArgs):
+    assert U.get_bool_env_var("MILES_SCRIPT_EXTERNAL_RAY"), (
+        "Start a four-node Ray cluster, then run with MILES_SCRIPT_EXTERNAL_RAY=1."
+    )
     prepare(args)
     execute(args)
 
