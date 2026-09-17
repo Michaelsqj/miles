@@ -1470,7 +1470,6 @@ class TestSetOffloadBufferBackupDefaults:
         assert args.disable_param_buffers_cpu_backup is True
 
     def test_disaggregated_actor_keeps_the_param_backup(self):
-        """No weights_backuper exists without --colocate; the memory saver's copy is the only one."""
         args = self._make_args(colocate=False)
         _set_offload_buffer_backup_defaults(args)
         assert args.disable_grad_buffers_cpu_backup is True

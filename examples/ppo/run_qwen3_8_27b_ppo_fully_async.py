@@ -4,26 +4,7 @@ import typer
 
 import miles.utils.external_utils.command_utils as U
 
-# Fully-async PPO (actor + critic) with the Megatron backend on 2 training nodes + 2 rollout
-# nodes.
-#
-# This is the disaggregated counterpart of run_qwen3_4b_ppo.py. There the actor, critic and
-# inference engines time-share one node under --colocate; here the 16 rollout GPUs run SGLang
-# continuously (--fully-async keeps --async-max-concurrent-samples trajectories in flight and
-# trains as soon as a batch of finished groups is available), and the 16 training GPUs hold the
-# actor and the critic. Three things follow from that split:
-#
-#   * --use-rollout-logprobs is mandatory. The rollout engines are up to --max-weight-staleness
-#     weight versions behind the trainer, so the behaviour policy's log probs have to come from
-#     the engine that generated the sample, not from a fresh actor forward pass.
-#   * The critic is placed on the actor's GPUs (see the README), so the two models share every
-#     card. They stay resident together (--no-offload-train): at PP2 the pair peaks at about
-#     66 GB (actor phase) + 29 GB (idle critic) of 140 GB, provided the idle model has released
-#     its allocator cache and the allocator does not fragment -- hence expandable_segments below.
-#   * PP > 1 is needed so that each model's parameters and gradients are spread over 8 GPUs per
-#     replica; TP is capped at 4 by the model's 4 KV groups.
-#
-# python examples/ppo/run_qwen3_8_27b_ppo_fully_async.py
+# Fully-async Qwen3.8-27B PPO on 2 training + 2 rollout nodes; see README.md.
 
 
 @dataclass
@@ -32,9 +13,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
     model_name: str = "Qwen3.8-27B"
     megatron_model_type: str = "qwen3.8-27B"
     num_gpus_per_node: int = 8
-    # actor world size, and therefore the critic's too: must equal TP * PP * CP * DP below.
     actor_num_nodes: int = 2
-    # one single-GPU SGLang engine per rollout GPU.
     rollout_num_gpus: int = 16
     data_dir: str = "/root/datasets"
     model_dir: str = "/root/models"
@@ -59,7 +38,6 @@ def prepare(args: ScriptArgs):
 def execute(args: ScriptArgs):
     load_save_path = f"{args.output_dir}/{args.run_id}/checkpoints"
 
-    # --critic-load / --critic-lr / --critic-save fall back exactly as in run_qwen3_4b_ppo.py.
     ckpt_args = (
         f"--hf-checkpoint {args.model_dir}/{args.model_name}/ "
         f"--ref-load {args.model_dir}/{args.model_name}_torch_dist "
@@ -86,17 +64,11 @@ def execute(args: ScriptArgs):
 
     async_args = (
         "--fully-async "
-        # Trajectories kept in flight on the 16 engines; a finished group is submitted for training
-        # as soon as it completes, and a new prompt takes its slot.
         "--async-max-concurrent-samples 128 "
         "--rollout-submission-granularity sample "
-        # A group generated under weight version v is still trained on after the update to v+1;
-        # older groups are dropped (rollout/fully_async/stale_groups_filtered).
         "--max-weight-staleness 1 "
-        # in_place freezes in-flight generation for the weight update and resumes it; abort is
-        # rejected by --fully-async and retract would regenerate everything in flight.
         "--pause-generation-mode in_place "
-        # The behaviour policy's log probs come from the engine that generated the sample.
+        # Async samples need the generating policy's log-probs.
         "--use-rollout-logprobs "
     )
 
@@ -132,8 +104,6 @@ def execute(args: ScriptArgs):
         "--weight-decay 0.1 "
         "--adam-beta1 0.9 "
         "--adam-beta2 0.98 "
-        # Master weights and Adam moments live on the host; on the GPU each model keeps only its
-        # bf16 parameters and gradients.
         "--optimizer-cpu-offload "
         "--overlap-cpu-optimizer-d2h-h2d "
         "--use-precision-aware-optimizer "
@@ -153,10 +123,7 @@ def execute(args: ScriptArgs):
         f"--actor-num-gpus-per-node {args.num_gpus_per_node} "
         f"--num-gpus-per-node {args.num_gpus_per_node} "
         f"--rollout-num-gpus {args.rollout_num_gpus} "
-        # Both models resident; see the header. The linear-attention Triton kernels benchmark new
-        # sequence-length buckets at runtime with memory the caching allocator never hands back, so
-        # the allocator must not hoard fragmented blocks (measured: 110 GB reserved for 66 GB live
-        # without expandable segments, 47 GB for 43 GB with them).
+        # Expandable segments limit fragmentation while actor and critic share the GPUs.
         "--no-offload-train "
         '--train-env-vars \'{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}\' '
     )

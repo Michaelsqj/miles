@@ -53,13 +53,7 @@ def _rollout_data(log_probs_key: str, with_values: bool) -> dict:
 
 
 def test_intermediate_pp_stage_returns_early_with_rollout_log_probs() -> None:
-    """Rollout log-probs exist on every pipeline stage; only the last stage owns values.
-
-    The stage decision must come from the parallel state, not from `log_probs`
-    and `values` both being absent: under --use-rollout-logprobs an
-    intermediate stage has log-probs but no values, and running the PPO
-    estimator there dereferences ``values``.
-    """
+    """Rollout log-probs must not trigger PPO computation on a stage without values."""
     _set_parallel_state(is_pp_last_stage=False)
     rollout_data = _rollout_data("rollout_log_probs", with_values=False)
 

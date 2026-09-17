@@ -448,9 +448,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     attempt=attempt,
                 )
 
-        # Record this phase's peak before releasing anything: the peak allocated
-        # (live tensors) is the number a topology has to fit, and the peak reserved
-        # is what a co-resident process actually loses to it.
         if torch.cuda.is_available() and dist.is_initialized():
             peak_alloc_gb = torch.cuda.max_memory_allocated() / 1024**3
             peak_reserved_gb = torch.cuda.max_memory_reserved() / 1024**3
@@ -460,11 +457,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             torch.cuda.reset_peak_memory_stats()
 
-        # Release this phase's cached allocator blocks. Without --offload-train the
-        # actor and critic are separate processes on the same GPUs, and one process
-        # cannot reclaim another's reservation: a critic that keeps its peak working
-        # set cached (~65 GB on a 27B model at 49k tokens) leaves the actor's phase
-        # to OOM on the free remainder even though both live sets fit.
+        # The co-resident actor/critic process cannot reclaim this process's allocator cache.
         del rollout_data
         clear_memory()
         return result
@@ -810,10 +803,7 @@ class MegatronTrainRayActor(TrainRayActor):
         process_groups_are_temporary = self.args.offload_train and self._asleep
         if process_groups_are_temporary:
             reload_process_groups()
-        # A disaggregated actor broadcasts its GPU parameters. While asleep those
-        # pages are released, so bring them back from their CPU backup for the
-        # broadcast and release them again afterwards. Colocated actors read the
-        # weights_backuper copy instead and never touch the paused buffers.
+        # Disaggregated weight sync reads GPU parameters; colocated sync reads CPU backups.
         params_are_paused = process_groups_are_temporary and not self.args.colocate
         if params_are_paused:
             # Match sleep/wake_up: LoRA keeps adapter params and gradients resident.

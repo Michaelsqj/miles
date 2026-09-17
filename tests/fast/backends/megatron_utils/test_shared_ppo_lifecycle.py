@@ -228,9 +228,6 @@ def test_update_weights_only_uses_temporary_process_groups_when_asleep(actor_mod
 
     assert reload_groups.call_count == int(asleep)
     assert destroy_groups.call_count == int(asleep)
-    # A sleeping disaggregated actor broadcasts from GPU parameters, so it must
-    # bring them back for the broadcast and release them again; a colocated
-    # actor reads its weights_backuper copy and never touches the paused buffers.
     expected = int(asleep and not colocate)
     assert saver.resume.call_count == expected
     assert saver.pause.call_count == expected
