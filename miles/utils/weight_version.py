@@ -39,7 +39,9 @@ def assert_samples_weight_version_sane(args: Namespace, samples: list["Sample"])
             _assert_span_weight_version_sane(sample=sample, span=span, what="were generated under")
         for span in sample.all_prefill_weight_version_spans:
             _assert_span_weight_version_sane(sample=sample, span=span, what="had their prompt KV computed under")
-        if args.sglang_enable_prefill_weight_versions:
+        # SGLang < 0.5.22 has no --enable-prefill-weight-versions (so no such arg) and never
+        # reports prompt KV versions; an absent flag means the check does not apply.
+        if getattr(args, "sglang_enable_prefill_weight_versions", False):
             _assert_sample_reports_prefill_weight_versions(sample)
 
 
